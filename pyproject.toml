@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "destacking"
+version = "0.1.0"
+description = "Joint fitting of weak lensing profiles for galaxy cluster scaling relations"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "scipy",
+    "astropy",
+]
+
+[project.optional-dependencies]
+fitting = ["nautilus-sampler"]
+# simulation requires xlensing: pip install git+https://github.com/andrevitorelli/xlensing
+
+[tool.setuptools.packages.find]
+include = ["destacking*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
