@@ -2,9 +2,12 @@ import numpy as np
 import pytest
 from destacking.simulation import (
     generate_truth_catalog,
+    make_test_data,
     _sample_powerlaw_lf,
     _pivot_from_delta_m,
 )
+
+RADII = np.logspace(-0.6, 0.6, 8)
 
 
 # ---------------------------------------------------------------------------
@@ -184,3 +187,57 @@ def test_custom_logM_range():
     logM = np.log10(cat['M_halo'])
     assert np.all(logM >= 14.0)
     assert np.all(logM <= 14.5)
+
+
+# ---------------------------------------------------------------------------
+# make_test_data
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def truth_for_data():
+    return generate_truth_catalog(30, seed=42, delta_m_gamma=0.5)
+
+
+def test_make_test_data_shapes(truth_for_data):
+    cluster_obs, data, covs = make_test_data(truth_for_data, RADII, seed=0)
+    N, M = len(truth_for_data), len(RADII)
+    assert data.shape   == (N, M)
+    assert covs.shape   == (N, M, M)
+    assert len(cluster_obs) == N
+
+
+def test_make_test_data_columns(truth_for_data):
+    cluster_obs, _, _ = make_test_data(truth_for_data, RADII, seed=0)
+    for col in ('z', 'Lambda', 'delta_m'):
+        assert col in cluster_obs.colnames
+
+
+def test_make_test_data_lambda_positive(truth_for_data):
+    cluster_obs, _, _ = make_test_data(truth_for_data, RADII, seed=0)
+    assert np.all(cluster_obs['Lambda'] >= 1.0)
+
+
+def test_make_test_data_covs_diagonal_positive(truth_for_data):
+    _, _, covs = make_test_data(truth_for_data, RADII, seed=0)
+    for i in range(len(truth_for_data)):
+        diag = np.diag(covs[i])
+        assert np.all(diag > 0)
+
+
+def test_make_test_data_covs_off_diagonal_zero(truth_for_data):
+    _, _, covs = make_test_data(truth_for_data, RADII, seed=0)
+    for i in range(len(truth_for_data)):
+        off = covs[i].copy()
+        np.fill_diagonal(off, 0.0)
+        assert np.all(off == 0.0)
+
+
+def test_make_test_data_data_positive(truth_for_data):
+    _, data, _ = make_test_data(truth_for_data, RADII, fractional_noise=0.05, seed=0)
+    assert np.all(data > 0)
+
+
+def test_make_test_data_seed_reproducible(truth_for_data):
+    _, d1, _ = make_test_data(truth_for_data, RADII, seed=99)
+    _, d2, _ = make_test_data(truth_for_data, RADII, seed=99)
+    np.testing.assert_array_equal(d1, d2)

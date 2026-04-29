@@ -7,6 +7,13 @@ from destacking.relations import (
     HOD_samples,
 )
 
+# McClintock+18 pivot constants (mirrored for inversion in make_test_data)
+_LOG10_LAMBDA0 = np.log10(40.0)
+_LOG10_Z0      = np.log10(0.35)
+_LOG10_M0      = 14.489
+_F_LAMBDA      = 1.356
+_G_Z           = -0.30
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -125,8 +132,8 @@ def generate_truth_catalog(
     astropy.table.Table
         Columns: z, M_halo [M_sun], concentration, M_BCG [M_sun],
         L_BCG [L_sun], L_brightest_sat [L_sun], delta_m [mag], N_sat.
-        L_brightest_sat and delta_m are NaN for clusters with no detected
-        satellites.
+        Clusters without detected satellites are discarded and resampled,
+        so all rows have finite delta_m and N_sat ≥ 1.
     """
     rng = np.random.default_rng(seed)
     # sample_zheng07_batch draws from the global np.random state; seed it too
@@ -137,37 +144,58 @@ def generate_truth_catalog(
     if HOD_sample is None:
         HOD_sample = HOD_samples['SDSS21.0']
 
-    # --- Redshifts and halo masses ---
-    z     = rng.uniform(z_range[0],    z_range[1],    N)
-    logM  = rng.uniform(logM_range[0], logM_range[1], N)
-    M_halo = 10.0 ** logM
+    z_keep, M_halo_keep, M_BCG_keep, L_BCG_keep = [], [], [], []
+    L_sat_keep, delta_m_keep, N_sat_keep        = [], [], []
 
-    # --- BCG stellar mass and luminosity ---
-    # Abundance-matching inspired scaling: log10(M_BCG) ≈ 0.4*log10(M_halo) + 6
-    # gives M_BCG ~ 10^11.6 M_sun at M_halo = 10^14, with 0.15 dex scatter.
-    log_M_BCG = 0.4 * logM + 6.0 + rng.normal(0.0, 0.15, N)
-    M_BCG  = 10.0 ** log_M_BCG
-    L_BCG  = lum_BCG_zheng07(M_BCG)    # [L_sun]
+    max_attempts = 100
+    for _ in range(max_attempts):
+        if len(z_keep) >= N:
+            break
+        n_try = max(N - len(z_keep), 16)
 
-    # --- Number of satellites from HOD ---
-    _, N_sat = sample_zheng07_batch(M_halo, HOD_sample)
+        z_try     = rng.uniform(z_range[0],    z_range[1],    n_try)
+        logM_try  = rng.uniform(logM_range[0], logM_range[1], n_try)
+        M_halo_try = 10.0 ** logM_try
 
-    # --- Satellite luminosities → magnitude gap ---
-    # Satellites are sampled from a power-law LF with L in [sat_L_min, L_BCG],
-    # so the BCG is guaranteed brighter than every satellite by construction.
-    L_brightest_sat = np.full(N, np.nan)
-    delta_m         = np.full(N, np.nan)
+        # log10(M_BCG) ≈ 0.4*log10(M_halo) + 6 → ~10^11.6 M_sun at M_halo=10^14
+        log_M_BCG_try = 0.4 * logM_try + 6.0 + rng.normal(0.0, 0.15, n_try)
+        M_BCG_try     = 10.0 ** log_M_BCG_try
+        L_BCG_try     = lum_BCG_zheng07(M_BCG_try)
 
-    for i in range(N):
-        n = int(N_sat[i])
-        if n == 0 or L_BCG[i] <= sat_L_min:
-            continue
-        L_sats = _sample_powerlaw_lf(n, sat_alpha, sat_L_min, L_BCG[i], rng)
-        L_brightest_sat[i] = L_sats.max()
-        # Δm = m_brightest_sat − m_BCG = 2.5 log10(L_BCG / L_brightest_sat) > 0
-        delta_m[i] = 2.5 * np.log10(L_BCG[i] / L_brightest_sat[i])
+        _, N_sat_try = sample_zheng07_batch(M_halo_try, HOD_sample)
 
-    # --- Concentration with magnitude-gap-dependent pivot ---
+        for i in range(n_try):
+            n_sat = int(N_sat_try[i])
+            if n_sat == 0 or L_BCG_try[i] <= sat_L_min:
+                continue
+            L_sats = _sample_powerlaw_lf(n_sat, sat_alpha, sat_L_min, L_BCG_try[i], rng)
+            L_max  = L_sats.max()
+            # Δm = 2.5 log10(L_BCG / L_brightest_sat) > 0 by construction
+            dm     = 2.5 * np.log10(L_BCG_try[i] / L_max)
+
+            z_keep.append(z_try[i])
+            M_halo_keep.append(M_halo_try[i])
+            M_BCG_keep.append(M_BCG_try[i])
+            L_BCG_keep.append(L_BCG_try[i])
+            L_sat_keep.append(L_max)
+            delta_m_keep.append(dm)
+            N_sat_keep.append(n_sat)
+            if len(z_keep) >= N:
+                break
+    else:
+        raise RuntimeError(
+            f"Could not draw {N} clusters with satellites in {max_attempts} batches; "
+            f"check HOD parameters and mass range."
+        )
+
+    z               = np.asarray(z_keep[:N])
+    M_halo          = np.asarray(M_halo_keep[:N])
+    M_BCG           = np.asarray(M_BCG_keep[:N])
+    L_BCG           = np.asarray(L_BCG_keep[:N])
+    L_brightest_sat = np.asarray(L_sat_keep[:N])
+    delta_m         = np.asarray(delta_m_keep[:N])
+    N_sat           = np.asarray(N_sat_keep[:N])
+
     c_param       = _pivot_from_delta_m(delta_m, c_pivot_0, delta_m_ref, delta_m_gamma)
     concentration = c_DuttonMaccio(z, M_halo, c=c_param)
     concentration *= 10.0 ** rng.normal(0.0, scatter_logc, N)   # intrinsic scatter
@@ -182,3 +210,83 @@ def generate_truth_catalog(
         'delta_m':         delta_m,
         'N_sat':           N_sat,
     })
+
+
+# ---------------------------------------------------------------------------
+# Synthetic test data
+# ---------------------------------------------------------------------------
+
+def make_test_data(
+    truth_catalog,
+    radii,
+    fractional_noise=0.2,
+    noise_floor=0.01,
+    seed=None,
+):
+    """
+    Build synthetic observed profiles and covariances from a truth catalog.
+
+    Profiles are computed from the true mass and concentration (bypassing
+    the richness-mass relation to avoid compounding scatter).  Gaussian
+    noise is then added.  Richness is assigned by inverting
+    mass_lambda_McClintock18 on the true mass and applying Poisson scatter.
+
+    Parameters
+    ----------
+    truth_catalog : astropy.table.Table
+        Output of generate_truth_catalog.  Required columns:
+        'z', 'M_halo', 'concentration', 'delta_m'.
+    radii : array (M,)
+        Projected radii in Mpc.
+    fractional_noise : float
+        Fractional Gaussian noise per profile bin (e.g. 0.2 = 20%).
+    noise_floor : float
+        Minimum absolute noise [M_sun/pc²] to prevent zero covariance.
+    seed : int or None
+
+    Returns
+    -------
+    cluster_table : astropy.table.Table
+        Observable table — columns 'z', 'Lambda', 'delta_m'.
+    data_vectors : ndarray (N, M)
+        Noisy ΔΣ profiles.
+    cov_matrices : ndarray (N, M, M)
+        Diagonal covariance matrices built from the per-bin noise.
+    """
+    # Local import to avoid circular dependency: model.py imports from this module.
+    from destacking.model import _nfw_profiles
+
+    rng = np.random.default_rng(seed)
+
+    z  = np.asarray(truth_catalog['z'])
+    M  = np.asarray(truth_catalog['M_halo'])
+    C  = np.asarray(truth_catalog['concentration'])
+    dm = np.asarray(truth_catalog['delta_m'], dtype=float)
+    N  = len(z)
+
+    true_profiles = _nfw_profiles(z, M, C, radii)                  # (N, Nrad)
+
+    sigma        = np.maximum(fractional_noise * true_profiles, noise_floor)
+    data_vectors = true_profiles + rng.normal(0.0, sigma)
+
+    Nrad = len(radii)
+    cov_matrices = np.zeros((N, Nrad, Nrad))
+    for i in range(N):
+        np.fill_diagonal(cov_matrices[i], sigma[i] ** 2)
+
+    # Richness: invert McClintock+18 on the true mass, then Poisson scatter
+    logLambda_true = (
+        (np.log10(M) - _LOG10_M0 - _G_Z * (np.log10(z) - _LOG10_Z0))
+        / _F_LAMBDA + _LOG10_LAMBDA0
+    )
+    Lambda_true = 10.0 ** logLambda_true
+    Lambda_obs  = rng.poisson(Lambda_true).astype(float)
+    Lambda_obs  = np.maximum(Lambda_obs, 1.0)   # at least 1 to keep log finite
+
+    cluster_table = table.Table({
+        'z':       z,
+        'Lambda':  Lambda_obs,
+        'delta_m': dm,
+    })
+
+    return cluster_table, data_vectors, cov_matrices
