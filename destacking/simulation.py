@@ -4,6 +4,7 @@ from destacking.relations import (
     c_DuttonMaccio,
     lum_BCG_zheng07,
     sample_zheng07_batch,
+    sample_halo_masses_tinker08,
     HOD_samples,
 )
 
@@ -105,7 +106,8 @@ def generate_truth_catalog(
     z_range : (float, float)
         Uniform redshift range (z_min, z_max).
     logM_range : (float, float)
-        Uniform range in log10(M_halo / M_sun).
+        log10 mass limits [M_sun] used as integration bounds for the
+        Tinker+08 halo mass function (default 13.5–15.0).
     HOD_sample : dict or None
         HOD parameter dictionary (see relations.HOD_samples).  Defaults to
         HOD_samples['SDSS21.0'].
@@ -142,7 +144,7 @@ def generate_truth_catalog(
         np.random.seed(int(np.random.default_rng(seed).integers(2**31)))
 
     if HOD_sample is None:
-        HOD_sample = HOD_samples['SDSS21.0']
+        HOD_sample = HOD_samples['SDSS18.0']
 
     z_keep, M_halo_keep, M_BCG_keep, L_BCG_keep = [], [], [], []
     L_sat_keep, delta_m_keep, N_sat_keep        = [], [], []
@@ -153,12 +155,11 @@ def generate_truth_catalog(
             break
         n_try = max(N - len(z_keep), 16)
 
-        z_try     = rng.uniform(z_range[0],    z_range[1],    n_try)
-        logM_try  = rng.uniform(logM_range[0], logM_range[1], n_try)
-        M_halo_try = 10.0 ** logM_try
+        z_try      = rng.uniform(z_range[0], z_range[1], n_try)
+        M_halo_try = sample_halo_masses_tinker08(z_try, logM_range[0], logM_range[1], rng)
 
         # log10(M_BCG) ≈ 0.4*log10(M_halo) + 6 → ~10^11.6 M_sun at M_halo=10^14
-        log_M_BCG_try = 0.4 * logM_try + 6.0 + rng.normal(0.0, 0.15, n_try)
+        log_M_BCG_try = 0.4 * np.log10(M_halo_try) + 6.0 + rng.normal(0.0, 0.15, n_try)
         M_BCG_try     = 10.0 ** log_M_BCG_try
         L_BCG_try     = lum_BCG_zheng07(M_BCG_try)
 

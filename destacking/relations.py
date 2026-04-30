@@ -115,7 +115,49 @@ def mass_lambda_McClintock18(Lambda,z):
   return mlog10M200
 
 
-####BCG Luminosity 
+def sample_halo_masses_tinker08(z_arr, logM_min=13.0, logM_max=15.5, rng=None):
+    """Sample halo masses from the Tinker+08 HMF at the given redshifts.
+
+    For each redshift in z_arr draws one mass with probability proportional
+    to dn/d(lnM) in [10^logM_min, 10^logM_max] (200m mass definition).
+
+    Parameters
+    ----------
+    z_arr : array-like
+        Redshifts at which to sample.
+    logM_min, logM_max : float
+        log10 of the mass integration limits [M_sun].
+    rng : numpy.random.Generator or None
+        Random generator for reproducibility.
+
+    Returns
+    -------
+    ndarray
+        Halo masses in M_sun, same length as z_arr.
+    """
+    from colossus.lss import mass_function as col_mf
+    from colossus.cosmology import cosmology as col_cosmo
+    col_cosmo.setCosmology('planck18')
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    z_arr = np.atleast_1d(np.asarray(z_arr, dtype=float))
+    M_grid = np.logspace(logM_min, logM_max, 500)
+    M_samples = np.empty(len(z_arr))
+
+    for i, z in enumerate(z_arr):
+        dndlnM = col_mf.massFunction(
+            M_grid, float(z), mdef='200m', model='tinker08', q_out='dndlnM'
+        )
+        cdf = np.cumsum(dndlnM)
+        cdf /= cdf[-1]
+        M_samples[i] = np.interp(rng.uniform(), cdf, M_grid)
+
+    return M_samples
+
+
+####BCG Luminosity
 def lum_BCG_zheng07(M_BCG):
     """
     BCG Luminosity as a function of mass
