@@ -370,6 +370,7 @@ def run_sampler_combined(
     f_intrinsic_scale=0.5,
     n_live=400,
     pool=None,
+    filepath=None,
     verbose=True,
 ):
     """
@@ -426,13 +427,20 @@ def run_sampler_combined(
         c0, alpha, beta, gamma, log_M_norm
     n_live : int
     pool : int or None
+    filepath : str or None
+        Path for nautilus checkpoint file.  The sampler saves its state
+        periodically; if the file already exists the run resumes from it.
+        If None (default) no checkpointing is done.
     verbose : bool
 
     Returns
     -------
     sampler : nautilus.Sampler
-        Completed sampler.  Call sampler.posterior() for samples.
+        Sampler object — complete if the run finished normally, otherwise
+        containing whatever chains were accumulated before the error.
+        Call sampler.posterior() to extract samples.
     """
+    import warnings
     from nautilus import Prior, Sampler
 
     lo, hi = gamma_range
@@ -463,6 +471,14 @@ def run_sampler_combined(
             log_M_norm=p['log_M_norm'],
         )
 
-    sampler = Sampler(prior, _loglike, n_live=n_live, pool=pool)
-    sampler.run(verbose=verbose)
+    sampler = Sampler(prior, _loglike, n_live=n_live, pool=pool,
+                      filepath=filepath)
+    try:
+        sampler.run(verbose=verbose)
+    except Exception as exc:
+        warnings.warn(
+            f"Nautilus sampler raised {type(exc).__name__}: {exc}\n"
+            "Returning sampler with chains accumulated so far. "
+            "Call sampler.posterior() to extract available samples."
+        )
     return sampler
