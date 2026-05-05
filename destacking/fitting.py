@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.linalg import solve_triangular
 
 from destacking.model import (
     forward_model, forward_model_mc, forward_model_combined,
@@ -9,45 +8,34 @@ from destacking.model import (
 from scipy.stats import truncnorm as sp_truncnorm, norm as sp_norm, uniform as sp_uniform
 
 
-def cholog_gaussian(data_vectors, cov_matrices, extra_diag=None):
+def cholog_gaussian(data_vectors, cov_matrices):
     """
     Simultaneous fitting of N datavectors of size k.
-    Optimized using Cholesky decomposition for better numerical stability.
-
-    Parameters
-    ----------
-    data_vectors : ndarray (N, k)
-        Residual vectors (data minus model).
-    cov_matrices : ndarray (N, k, k)
-        Per-cluster covariance matrices (e.g. shape noise only).
-    extra_diag : ndarray (N, k) or None
-        Optional extra variance to add to the diagonal of each covariance
-        matrix before factorization.  Used to inject per-cluster intrinsic
-        scatter (e.g. from triaxiality) on top of the measurement noise.
+    Optimized using Cholesky decomposition for better numerical stability
     """
     n, k = data_vectors.shape
-    total_log_lik = 0.0
+    total_log_lik = 0
     log_2pi = np.log(2 * np.pi)
-
+    
     for i in range(n):
-        cov_i = cov_matrices[i] if extra_diag is None else (
-            cov_matrices[i] + np.diag(extra_diag[i])
-        )
+        # Cholesky decomposition
         try:
-            L = np.linalg.cholesky(cov_i)
-            # Use triangular solver — correct and stable for a Cholesky factor.
-            # np.linalg.solve uses a general LU solver which can raise
-            # "Singular matrix" for triangular systems on some LAPACK builds.
-            y = solve_triangular(L, data_vectors[i], lower=True)
-            quad_form = np.dot(y, y)
-            log_det = 2.0 * np.sum(np.log(np.diag(L)))
-            total_log_lik += -0.5 * (k * log_2pi + log_det + quad_form)
-        except Exception:
+            L = np.linalg.cholesky(cov_matrices[i])
+            # Solve L * y = x (forward substitution)
+            y = np.linalg.solve(L, data_vectors[i])
+            # Compute quadratic form
+            quad_form = np.sum(y**2)
+            # Log determinant
+            log_det = 2 * np.sum(np.log(np.diag(L)))
+            
+            # Log likelihood
+            log_lik = -0.5 * (k * log_2pi + log_det + quad_form)
+            total_log_lik += log_lik
+            
+        except np.linalg.LinAlgError:
             return -np.inf
 
-    # Guard against silent NaN propagation (e.g. from NaN in extra_diag when
-    # the forward model returns non-finite values for extreme parameters).
-    return total_log_lik if np.isfinite(total_log_lik) else -np.inf
+    return total_log_lik
 
 
 # ---------------------------------------------------------------------------
@@ -313,36 +301,22 @@ def log_likelihood_combined(
     M_pivot_log=_MC_M_PIVOT_LOG,
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
-    f_intrinsic=0.0,
     log_M_norm=0.0,
 ):
     """
     Log-likelihood for the combined M–c + magnitude-gap model.
 
-    Parameters
-    ----------
-    f_intrinsic : float
-        Fractional per-cluster intrinsic scatter added in quadrature to the
-        diagonal of each covariance matrix: extra_var[i,b] = (f_int * |model[i,b]|)².
-        Represents unmodelled scatter from triaxiality, miscentering, etc.
-        Must be >= 0.  Default 0 (shape noise only).
-
-    Returns -inf for unphysical c0/f_intrinsic or if the forward model raises.
+    Returns -inf for unphysical c0 or if the forward model raises.
     """
-    if c0 <= 0 or f_intrinsic < 0:
+    if c0 <= 0:
         return -np.inf
     try:
-        model = forward_model_combined(
+        model     = forward_model_combined(
             c0, alpha, gamma, cluster_table, radii,
             beta=beta, M_pivot_log=M_pivot_log, z_ref=z_ref,
             delta_m_ref=delta_m_ref, log_M_norm=log_M_norm,
         )
-        if not np.all(np.isfinite(model)):
-            return -np.inf
         residuals = data_vectors - model
-        if f_intrinsic > 0:
-            extra_diag = (f_intrinsic * np.abs(model)) ** 2
-            return cholog_gaussian(residuals, cov_matrices, extra_diag=extra_diag)
         return cholog_gaussian(residuals, cov_matrices)
     except Exception:
         return -np.inf
@@ -366,11 +340,8 @@ def run_sampler_combined(
     delta_m_ref=_MC_DM_REF,
     log_M_norm_sigma=0.1,
     fit_beta=True,
-    fit_intrinsic=False,
-    f_intrinsic_scale=0.5,
     n_live=400,
     pool=None,
-    filepath=None,
     verbose=True,
 ):
     """
@@ -408,39 +379,18 @@ def run_sampler_combined(
         Gaussian prior sigma on log_M_norm [dex].
     fit_beta : bool
         If True, include beta as a free parameter.
+        Parameter order: c0, alpha, beta, gamma, log_M_norm.
         If False, fix beta = 0.
-    fit_intrinsic : bool
-        If True, add f_intrinsic as a free nuisance parameter representing
-        fractional per-cluster scatter (e.g. from triaxiality).  The covariance
-        matrix for each cluster is augmented as
-        cov[i,b,b] += (f_intrinsic * |model[i,b]|)².
-        Recommended when lensing data are generated from triaxial halos or
-        when the shape-noise-only covariance is known to be underestimated.
-        Default False (backward compatible).
-    f_intrinsic_scale : float
-        Upper bound of the Uniform(0, f_intrinsic_scale) prior on f_intrinsic.
-        Ignored when fit_intrinsic=False.  Default 0.5.
-
-    Parameter order in posterior (fit_beta=True, fit_intrinsic=True):
-        c0, alpha, beta, gamma, f_intrinsic, log_M_norm
-    Parameter order (fit_beta=True, fit_intrinsic=False):
-        c0, alpha, beta, gamma, log_M_norm
+        Parameter order: c0, alpha, gamma, log_M_norm.
     n_live : int
     pool : int or None
-    filepath : str or None
-        Path for nautilus checkpoint file.  The sampler saves its state
-        periodically; if the file already exists the run resumes from it.
-        If None (default) no checkpointing is done.
     verbose : bool
 
     Returns
     -------
     sampler : nautilus.Sampler
-        Sampler object — complete if the run finished normally, otherwise
-        containing whatever chains were accumulated before the error.
-        Call sampler.posterior() to extract samples.
+        Completed sampler.  Call sampler.posterior() for samples.
     """
-    import warnings
     from nautilus import Prior, Sampler
 
     lo, hi = gamma_range
@@ -454,9 +404,6 @@ def run_sampler_combined(
         prior.add_parameter('beta', dist=sp_norm(loc=beta_prior_loc, scale=beta_prior_scale))
     prior.add_parameter('gamma',
         dist=sp_truncnorm(a=a, b=b, loc=0.0, scale=gamma_prior_sigma))
-    if fit_intrinsic:
-        prior.add_parameter('f_intrinsic',
-            dist=sp_uniform(loc=0.0, scale=f_intrinsic_scale))
     prior.add_parameter('log_M_norm', dist=sp_norm(loc=0.0, scale=log_M_norm_sigma))
 
     def _loglike(p):
@@ -467,18 +414,9 @@ def run_sampler_combined(
             M_pivot_log=M_pivot_log,
             z_ref=z_ref,
             delta_m_ref=delta_m_ref,
-            f_intrinsic=p.get('f_intrinsic', 0.0),
             log_M_norm=p['log_M_norm'],
         )
 
-    sampler = Sampler(prior, _loglike, n_live=n_live, pool=pool,
-                      filepath=filepath)
-    try:
-        sampler.run(verbose=verbose)
-    except Exception as exc:
-        warnings.warn(
-            f"Nautilus sampler raised {type(exc).__name__}: {exc}\n"
-            "Returning sampler with chains accumulated so far. "
-            "Call sampler.posterior() to extract available samples."
-        )
+    sampler = Sampler(prior, _loglike, n_live=n_live, pool=pool)
+    sampler.run(verbose=verbose)
     return sampler
