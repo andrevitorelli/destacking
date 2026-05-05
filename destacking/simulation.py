@@ -222,6 +222,7 @@ def make_test_data(
     radii,
     fractional_noise=0.2,
     noise_floor=0.01,
+    poisson_richness=True,
     seed=None,
 ):
     """
@@ -243,6 +244,13 @@ def make_test_data(
         Fractional Gaussian noise per profile bin (e.g. 0.2 = 20%).
     noise_floor : float
         Minimum absolute noise [M_sun/pc²] to prevent zero covariance.
+    poisson_richness : bool
+        If True (default), apply Poisson scatter to richness Λ around the
+        deterministic McClintock+18 inversion of the true mass.  Set to
+        False to bypass this scatter — useful when comparing the recovered
+        model parameters against truth, since the forward model uses Λ to
+        estimate mass and Poisson scatter introduces an errors-in-variables
+        bias.
     seed : int or None
 
     Returns
@@ -281,8 +289,11 @@ def make_test_data(
         / _F_LAMBDA + _LOG10_LAMBDA0
     )
     Lambda_true = 10.0 ** logLambda_true
-    Lambda_obs  = rng.poisson(Lambda_true).astype(float)
-    Lambda_obs  = np.maximum(Lambda_obs, 1.0)   # at least 1 to keep log finite
+    if poisson_richness:
+        Lambda_obs = rng.poisson(Lambda_true).astype(float)
+        Lambda_obs = np.maximum(Lambda_obs, 1.0)   # at least 1 to keep log finite
+    else:
+        Lambda_obs = Lambda_true.astype(float)
 
     cluster_table = table.Table({
         'z':       z,
