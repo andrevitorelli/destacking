@@ -13,21 +13,54 @@ _MC_DM_REF      = 1.0    # reference magnitude gap [mag]
 # Internal: NFW profile computation
 # ---------------------------------------------------------------------------
 
-def _nfw_profiles(z, M200m, C200m, radii):
-    """NFW ΔΣ profiles for N clusters at M radii, no miscentering or BCG term.
+def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
+                  BCG_B_MASS=None):
+    """One-halo NFW ΔΣ profiles for N clusters at M radii (no 2-halo term).
 
-    Returns array of shape (N, M) in M_sun/pc².
+    The returned signal is ``xlensing.model.NFW_Delta_Sigma['Signal']
+    − ['Two-halo term']``, i.e. the mixture
+    ``(1 − FMISS)·NFW_centered + FMISS·NFW_miscentered + BCG``.
+    With the default FMISS=zeros, BCG=zeros this reduces to the centered NFW
+    signal exactly as before.
+
+    Parameters
+    ----------
+    z, M200m, C200m : array_like (N,)
+        Per-cluster redshift, M200m [M_sun], and c200m.
+    radii : array_like (M,)
+        Projected radii [Mpc].
+    FMISS : array_like (N,) or None
+        Per-cluster miscentered-signal fraction (0 = always centered,
+        1 = always miscentered, intermediate = mixture).  Default ``None`` → zeros.
+    SIGMA_OFF : array_like (N,) or None
+        Per-cluster Rayleigh scale of the miscentering offset distribution
+        [Mpc].  Irrelevant where FMISS=0.  Default ``None`` → 0.1 Mpc.
+    BCG_B_MASS : array_like (N,) or None
+        Per-cluster baryonic BCG mass [M_sun].  Default ``None`` → 0.
+
+    Returns
+    -------
+    ndarray (N, M)
+        ΔΣ in M_sun/pc² (one-halo: centered + miscentered NFW + BCG, no 2-halo).
     """
     N = len(z)
-    return xlensing.model.NFW_Delta_Sigma(
+    if FMISS is None:
+        FMISS = np.zeros(N)
+    if SIGMA_OFF is None:
+        SIGMA_OFF = np.ones(N) * 0.1
+    if BCG_B_MASS is None:
+        BCG_B_MASS = np.zeros(N)
+
+    out = xlensing.model.NFW_Delta_Sigma(
         M200m      = M200m,
         C200m      = C200m,
         Z          = z,
-        FMISS      = np.zeros(N),
-        SIGMA_OFF  = np.ones(N) * 0.1,   # irrelevant when FMISS=0
-        BCG_B_MASS = np.zeros(N),
+        FMISS      = FMISS,
+        SIGMA_OFF  = SIGMA_OFF,
+        BCG_B_MASS = BCG_B_MASS,
         radii      = radii,
-    )['NFW Signal']   # (N, M)
+    )
+    return out['Signal'] - out['Two-halo term']
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +200,9 @@ def forward_model_combined(
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
     log_M_norm=0.0,
+    FMISS=None,
+    SIGMA_OFF=None,
+    BCG_B_MASS=None,
 ):
     """
     Predict NFW ΔΣ profiles using a combined M–c + magnitude-gap model.
@@ -180,6 +216,10 @@ def forward_model_combined(
 
     gamma is d(log10 c) / d(log10(Δm/Δm_ref)).  Clusters without detected
     satellites (delta_m = NaN) receive no gamma correction (log10 ratio = 0).
+
+    The signal returned is the one-halo mixture
+    ``(1 − FMISS)·NFW_centered + FMISS·NFW_miscentered + BCG`` from
+    ``xlensing.model.NFW_Delta_Sigma`` with the 2-halo term subtracted.
 
     Parameters
     ----------
@@ -203,6 +243,9 @@ def forward_model_combined(
         Reference magnitude gap [mag].  Default 1.0.
     log_M_norm : float
         Log10 mass normalisation offset [dex].  Default 0.
+    FMISS, SIGMA_OFF, BCG_B_MASS : array_like (N,) or None
+        Optional per-cluster miscentering and BCG arrays passed through to
+        ``_nfw_profiles``.  Default ``None`` → centered, no BCG.
 
     Returns
     -------
@@ -226,4 +269,5 @@ def forward_model_combined(
             + gamma * log_dm_r)
     C200m = 10.0 ** logC
 
-    return _nfw_profiles(z, M200m, C200m, radii)
+    return _nfw_profiles(z, M200m, C200m, radii,
+                        FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS)

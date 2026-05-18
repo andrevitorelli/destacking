@@ -302,9 +302,16 @@ def log_likelihood_combined(
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
     log_M_norm=0.0,
+    FMISS=None,
+    SIGMA_OFF=None,
+    BCG_B_MASS=None,
 ):
     """
     Log-likelihood for the combined M–c + magnitude-gap model.
+
+    FMISS, SIGMA_OFF, BCG_B_MASS are passed through to forward_model_combined as
+    fixed per-cluster miscentering / BCG arrays.  Default None means centered
+    NFW with no BCG.
 
     Returns -inf for unphysical c0 or if the forward model raises.
     """
@@ -315,6 +322,7 @@ def log_likelihood_combined(
             c0, alpha, gamma, cluster_table, radii,
             beta=beta, M_pivot_log=M_pivot_log, z_ref=z_ref,
             delta_m_ref=delta_m_ref, log_M_norm=log_M_norm,
+            FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
         )
         residuals = data_vectors - model
         return cholog_gaussian(residuals, cov_matrices)
@@ -343,6 +351,10 @@ def run_sampler_combined(
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
     fit_beta=True,
+    # Fixed per-cluster miscentering / BCG arrays (not sampled)
+    FMISS=None,
+    SIGMA_OFF=None,
+    BCG_B_MASS=None,
     n_live=400,
     pool=None,
     verbose=True,
@@ -403,6 +415,14 @@ def run_sampler_combined(
         Parameter order: c0, alpha, beta, gamma, log_M_norm.
         If False, fix beta = 0.
         Parameter order: c0, alpha, gamma, log_M_norm.
+    FMISS : array_like (N,) or None
+        Per-cluster miscentered-signal fraction.  Held fixed (not sampled).
+        Default None → zeros (centered NFW).
+    SIGMA_OFF : array_like (N,) or None
+        Per-cluster Rayleigh scale of the miscentering offset distribution
+        [Mpc].  Held fixed.  Default None → 0.1 Mpc (irrelevant when FMISS=0).
+    BCG_B_MASS : array_like (N,) or None
+        Per-cluster baryonic BCG mass [M_sun].  Held fixed.  Default None → 0.
     n_live : int
     pool : int or None
     verbose : bool
@@ -452,6 +472,9 @@ def run_sampler_combined(
             z_ref=z_ref,
             delta_m_ref=delta_m_ref,
             log_M_norm=p['log_M_norm'],
+            FMISS=FMISS,
+            SIGMA_OFF=SIGMA_OFF,
+            BCG_B_MASS=BCG_B_MASS,
         )
 
     sampler = Sampler(nprior, _loglike, n_live=n_live, pool=pool)
