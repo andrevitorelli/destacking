@@ -327,6 +327,8 @@ def run_sampler_combined(
     data_vectors,
     cov_matrices,
     radii,
+    priors=None,
+    # Legacy individual kwargs — used only when priors is None
     c0_prior_loc=5.0,
     c0_prior_scale=5.0,
     alpha_prior_loc=0.0,
@@ -335,10 +337,11 @@ def run_sampler_combined(
     beta_prior_scale=1.0,
     gamma_range=(-1.0, 1.0),
     gamma_prior_sigma=0.5,
+    log_M_norm_sigma=0.1,
+    # Model hyperparameters
     M_pivot_log=_MC_M_PIVOT_LOG,
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
-    log_M_norm_sigma=0.1,
     fit_beta=True,
     n_live=400,
     pool=None,
@@ -351,8 +354,9 @@ def run_sampler_combined(
     optionally beta (redshift evolution), gamma (magnitude-gap slope [dex/mag]),
     and log_M_norm (mass-richness calibration offset).
 
-    gamma is d(log10 c)/d(Δm [mag]).  Positive gamma shifts all clusters above
-    the M–c baseline (since Δm ≥ 0).
+    The recommended way to declare priors is via the ``priors`` dict.  For
+    backward compatibility, when ``priors=None`` the function builds an
+    equivalent dict from the individual ``*_prior_*`` legacy kwargs.
 
     Parameters
     ----------
@@ -361,22 +365,39 @@ def run_sampler_combined(
     data_vectors : ndarray (N, M)
     cov_matrices : ndarray (N, M, M)
     radii : array (M,)
+    priors : dict[str, scipy.stats distribution] or None
+        Mapping from parameter name to a frozen ``scipy.stats`` distribution
+        (anything that exposes ``.pdf`` and is accepted by
+        ``nautilus.Prior.add_parameter``).
+        Required keys: ``'c0'``, ``'alpha'``, ``'gamma'``, ``'log_M_norm'``.
+        Required additionally when ``fit_beta=True``: ``'beta'``.
+        Example::
+
+            from scipy.stats import norm, truncnorm
+            priors = {
+                'c0':         norm(loc=5.0, scale=5.0),
+                'alpha':      norm(loc=0.0, scale=0.5),
+                'beta':       norm(loc=0.0, scale=1.0),
+                'gamma':      truncnorm(a=-2, b=2, loc=0.0, scale=0.5),
+                'log_M_norm': norm(loc=0.0, scale=0.1),
+            }
+        Default ``None`` — fall back to the individual legacy kwargs below.
     c0_prior_loc, c0_prior_scale : float
-        Gaussian prior on c0.
+        Gaussian prior on c0 (legacy, used only when ``priors`` is None).
     alpha_prior_loc, alpha_prior_scale : float
-        Gaussian prior on alpha.
+        Gaussian prior on alpha (legacy).
     beta_prior_loc, beta_prior_scale : float
-        Gaussian prior on beta.  Ignored when fit_beta=False.
+        Gaussian prior on beta (legacy).  Ignored when fit_beta=False.
     gamma_range : (float, float)
-        Truncation bounds for the TruncNormal prior on gamma [dex/dex].
+        Truncation bounds for the TruncNormal prior on gamma (legacy).
     gamma_prior_sigma : float
-        Sigma of the TruncNormal prior on gamma, centred at 0.
+        Sigma of the TruncNormal prior on gamma, centred at 0 (legacy).
+    log_M_norm_sigma : float
+        Gaussian prior sigma on log_M_norm [dex] (legacy).
     M_pivot_log, z_ref : float
         Fixed model hyperparameters (not sampled).
     delta_m_ref : float
         Reference magnitude gap [mag].  Default 1.0.
-    log_M_norm_sigma : float
-        Gaussian prior sigma on log_M_norm [dex].
     fit_beta : bool
         If True, include beta as a free parameter.
         Parameter order: c0, alpha, beta, gamma, log_M_norm.
@@ -393,18 +414,34 @@ def run_sampler_combined(
     """
     from nautilus import Prior, Sampler
 
-    lo, hi = gamma_range
-    a = (lo - 0.0) / gamma_prior_sigma
-    b = (hi - 0.0) / gamma_prior_sigma
+    if priors is None:
+        lo, hi = gamma_range
+        a = (lo - 0.0) / gamma_prior_sigma
+        b = (hi - 0.0) / gamma_prior_sigma
+        priors = {
+            'c0':         sp_norm(loc=c0_prior_loc,    scale=c0_prior_scale),
+            'alpha':      sp_norm(loc=alpha_prior_loc, scale=alpha_prior_scale),
+            'beta':       sp_norm(loc=beta_prior_loc,  scale=beta_prior_scale),
+            'gamma':      sp_truncnorm(a=a, b=b, loc=0.0, scale=gamma_prior_sigma),
+            'log_M_norm': sp_norm(loc=0.0, scale=log_M_norm_sigma),
+        }
 
-    prior = Prior()
-    prior.add_parameter('c0',    dist=sp_norm(loc=c0_prior_loc,    scale=c0_prior_scale))
-    prior.add_parameter('alpha', dist=sp_norm(loc=alpha_prior_loc, scale=alpha_prior_scale))
+    required = {'c0', 'alpha', 'gamma', 'log_M_norm'}
     if fit_beta:
-        prior.add_parameter('beta', dist=sp_norm(loc=beta_prior_loc, scale=beta_prior_scale))
-    prior.add_parameter('gamma',
-        dist=sp_truncnorm(a=a, b=b, loc=0.0, scale=gamma_prior_sigma))
-    prior.add_parameter('log_M_norm', dist=sp_norm(loc=0.0, scale=log_M_norm_sigma))
+        required.add('beta')
+    missing = required - set(priors)
+    if missing:
+        raise KeyError(
+            f"priors dict is missing required keys: {sorted(missing)}"
+        )
+
+    nprior = Prior()
+    nprior.add_parameter('c0',    dist=priors['c0'])
+    nprior.add_parameter('alpha', dist=priors['alpha'])
+    if fit_beta:
+        nprior.add_parameter('beta', dist=priors['beta'])
+    nprior.add_parameter('gamma',      dist=priors['gamma'])
+    nprior.add_parameter('log_M_norm', dist=priors['log_M_norm'])
 
     def _loglike(p):
         return log_likelihood_combined(
@@ -417,6 +454,6 @@ def run_sampler_combined(
             log_M_norm=p['log_M_norm'],
         )
 
-    sampler = Sampler(prior, _loglike, n_live=n_live, pool=pool)
+    sampler = Sampler(nprior, _loglike, n_live=n_live, pool=pool)
     sampler.run(verbose=verbose)
     return sampler
