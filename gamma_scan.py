@@ -56,7 +56,14 @@ import ngmix
 
 from destacking.fitting import run_sampler_combined
 from destacking.model import _MC_M_PIVOT_LOG, _MC_Z_REF
-from destacking.simulation import generate_truth_catalog, make_test_data
+from destacking.simulation import (
+    generate_truth_catalog,
+    make_test_data,
+    des_y3_cluster_pdf,
+    sample_des_y3_cluster_z,
+    des_y3_source_pdf,
+    sample_des_y3_source_z,
+)
 
 import xlensing.cosmo as _xlc
 import xlensing.sims as _xlsims
@@ -125,24 +132,7 @@ OUTDIR = "gamma_scan_outputs"
 os.makedirs(OUTDIR, exist_ok=True)
 
 
-# ── DES Y3 distributions ────────────────────────────────────────────────────
-def des_y3_cluster_pdf(z, z_min=DES_Y3_Z_CLUSTER_RANGE[0], z_max=DES_Y3_Z_CLUSTER_RANGE[1]):
-    z = np.atleast_1d(z).astype(float)
-    in_range = (z >= z_min) & (z <= z_max)
-    pdf = np.where(in_range, z**2, 0.0)
-    z_grid = np.linspace(z_min, z_max, 1000)
-    return pdf / np.trapezoid(z_grid**2, z_grid)
-
-
-def sample_des_y3_source_z(N, rng, z_min=Z_SRC_RANGE[0], z_max=Z_SRC_RANGE[1],
-                            alpha=DES_Y3_Z_SRC_ALPHA, beta=DES_Y3_Z_SRC_BETA,
-                            z0=DES_Y3_Z_SRC_Z0):
-    z_grid = np.linspace(max(z_min, 1e-3), z_max, 5000)
-    pdf = (z_grid / z0) ** alpha * np.exp(-((z_grid / z0) ** beta))
-    cdf = np.cumsum(pdf)
-    cdf /= cdf[-1]
-    u = rng.uniform(0, 1, N)
-    return np.interp(u, cdf, z_grid)
+# DES Y3 distribution functions are imported from destacking.simulation.
 
 
 # ── Pipeline stages ─────────────────────────────────────────────────────────
@@ -232,7 +222,11 @@ def _process_cluster(i):
 
     # Override source z with DES Y3 source n(z).
     rng_src = np.random.default_rng(5000 + i)
-    gal_i[:, 2] = sample_des_y3_source_z(n_gals, rng_src)
+    gal_i[:, 2] = sample_des_y3_source_z(
+        n_gals, rng_src,
+        z_min=Z_SRC_RANGE[0], z_max=Z_SRC_RANGE[1],
+        alpha=DES_Y3_Z_SRC_ALPHA, beta=DES_Y3_Z_SRC_BETA, z0=DES_Y3_Z_SRC_Z0,
+    )
 
     # Lognormal-size based metacal responses.
     rng_resp = np.random.default_rng(6000 + i)
