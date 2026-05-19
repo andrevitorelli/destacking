@@ -30,7 +30,8 @@ Configuration is exposed via environment variables:
   N_CLUSTERS    Number of clusters per run     (default 10000)
   GAMMA_VALUES  Comma-separated gamma list     (default -0.4,-0.2,0.0,0.2,0.4)
   N_WORKERS     Pool workers for lensing/sampler (default 15)
-  SEED          Master RNG seed                (default 42)
+  MASTER_SEED   Master RNG seed (None or int)  (default None — fresh entropy
+                every RNG; set to an integer for a fully reproducible run)
   RUN_DIR       Explicit output directory      (default
                 gamma_scan_outputs/run_YYYY-MM-DDTHH-MM-SS).  Each invocation
                 creates a fresh timestamped subdirectory so multiple scans do
@@ -92,7 +93,26 @@ GAMMA_VALUES = np.linspace(-.5,.5,20)
 # GAMMA_VALUES = [
 #     float(g) for g in os.environ.get("GAMMA_VALUES", "-0.4,-0.2,0.0,0.2,0.4").split(",")
 # ]
-SEED = int(os.environ.get("SEED", 42))
+# ── Centralised seeds ──
+# MASTER_SEED defaults to None so that every RNG in the pipeline draws fresh
+# OS entropy (a different realisation per invocation, just like the notebook
+# default).  Set the MASTER_SEED env var to an integer for a fully
+# reproducible run; every other seed is derived from this single value via
+# the _seed() helper below.
+def _parse_master_seed(env_value):
+    if env_value is None:
+        return None
+    s = env_value.strip().lower()
+    if s in ("", "none", "null"):
+        return None
+    return int(s)
+
+MASTER_SEED = _parse_master_seed(os.environ.get("MASTER_SEED"))
+
+def _seed(offset):
+    """MASTER_SEED + offset, or None when MASTER_SEED is None."""
+    return None if MASTER_SEED is None else MASTER_SEED + int(offset)
+
 N_WORKERS = int(os.environ.get("N_WORKERS", 15))
 
 DELTA_M_REF = 0.1
@@ -154,7 +174,7 @@ os.makedirs(OUTDIR, exist_ok=True)
 
 
 # ── Pipeline stages ─────────────────────────────────────────────────────────
-def build_truth_catalog(gamma_true, seed):
+def build_truth_catalog(gamma_true):
     n_pool = N_CLUSTERS * N_OVERSAMPLE_CLUSTER
     truth_pool = generate_truth_catalog(
         n_pool,
@@ -162,12 +182,12 @@ def build_truth_catalog(gamma_true, seed):
         logM_range=(13.5, 15.0),
         delta_m_gamma=0.0,
         scatter_logc=0.0,
-        seed=seed,
+        seed=_seed(0),
     )
     z_pool = np.asarray(truth_pool["z"])
     w_pool = des_y3_cluster_pdf(z_pool, *DES_Y3_Z_CLUSTER_RANGE)
     w_pool = w_pool / w_pool.sum()
-    rng_res = np.random.default_rng(seed + 100)
+    rng_res = np.random.default_rng(_seed(100))
     idx = rng_res.choice(n_pool, size=N_CLUSTERS, replace=False, p=w_pool)
     truth = truth_pool[np.sort(idx)]
 
@@ -193,9 +213,9 @@ def build_truth_catalog(gamma_true, seed):
     return truth, truth_params
 
 
-def compute_triaxial_shapes(truth, seed):
+def compute_triaxial_shapes(truth):
     """Thin wrapper around xlensing.sims.sample_triaxial_shapes."""
-    rng_tri = np.random.default_rng(seed + 10)
+    rng_tri = np.random.default_rng(_seed(10))
     s = sample_triaxial_shapes(
         truth["z"], truth["M_halo"],
         ba_range=(0.5, 1.0), ca_lo=0.3, isotropic_los=True, rng=rng_tri,
@@ -203,8 +223,8 @@ def compute_triaxial_shapes(truth, seed):
     return s["r_vir"], s["q_ba"], s["q_ca"], s["theta_los"], s["phi_los"]
 
 
-def compute_miscentering(seed):
-    rng_mis = np.random.default_rng(seed + 20)
+def compute_miscentering():
+    rng_mis = np.random.default_rng(_seed(20))
     is_mis = rng_mis.uniform(0, 1, N_CLUSTERS) > F_CEN
     off_mag_mpc = np.where(
         is_mis, rng_mis.rayleigh(scale=SIGMA_OFF_MPC, size=N_CLUSTERS), 0.0
@@ -234,12 +254,12 @@ def _process_cluster(i):
     # Independent random background catalogue for this cluster with Poisson density.
     gal_i = make_simple_random_cat(
         DENSITY, WIDTH_RAD, Z_SRC_RANGE, shape_noise=0.0,
-        seed=4000 + i, poisson_density=True,
+        seed=_seed(4000 + i), poisson_density=True,
     ).T
     n_gals = len(gal_i)
 
     # Override source z with DES Y3 source n(z).
-    rng_src = np.random.default_rng(5000 + i)
+    rng_src = np.random.default_rng(_seed(5000 + i))
     gal_i[:, 2] = sample_des_y3_source_z(
         n_gals, rng_src,
         z_min=Z_SRC_RANGE[0], z_max=Z_SRC_RANGE[1],
@@ -247,7 +267,7 @@ def _process_cluster(i):
     )
 
     # Lognormal-size based metacal responses.
-    rng_resp = np.random.default_rng(6000 + i)
+    rng_resp = np.random.default_rng(_seed(6000 + i))
     sizes  = rng_resp.lognormal(mean=np.log(0.5), sigma=0.5, size=n_gals)
     R_RESP = np.clip(1.0 - (sizes / 1.5) ** 2, 0.05, 0.99)
     gal_i[:, 5] = R_RESP
@@ -256,7 +276,7 @@ def _process_cluster(i):
     gal_i[:, 8] = R_RESP
 
     # Intrinsic shapes drawn AFTER n_gals is known.
-    rng_sh = np.random.default_rng(1000 + i)
+    rng_sh = np.random.default_rng(_seed(1000 + i))
     sp_i = ngmix.priors.shape.GPriorBA(sigma=SHAPE_NOISE, rng=rng_sh)
     e1, e2 = sp_i.sample2d(n_gals)
     gal_i[:, 3] = e1
@@ -354,11 +374,15 @@ def simulate_lensing(truth, shapes, mis):
     return data_vectors, cov_matrices
 
 
-def run_one_gamma(gamma_true, seed):
-    """Full single-gamma pipeline. Returns posterior-summary dict."""
+def run_one_gamma(gamma_true):
+    """Full single-gamma pipeline. Returns posterior-summary dict.
+
+    All RNG seeds in the pipeline are derived from the module-level
+    MASTER_SEED via the _seed() helper.
+    """
     print(f"\n=== gamma_true = {gamma_true:+.3f} ===", flush=True)
 
-    truth, truth_params = build_truth_catalog(gamma_true, seed)
+    truth, truth_params = build_truth_catalog(gamma_true)
     print(
         f"  Truth params: c0={truth_params['c0_true']:.3f}, "
         f"alpha={truth_params['alpha_true']:.4f}, "
@@ -367,14 +391,15 @@ def run_one_gamma(gamma_true, seed):
         flush=True,
     )
 
-    shapes = compute_triaxial_shapes(truth, seed)
-    mis = compute_miscentering(seed)
+    shapes = compute_triaxial_shapes(truth)
+    mis = compute_miscentering()
 
     print(f"  Running lensing simulation ({N_CLUSTERS} clusters)...", flush=True)
     data_vectors, cov_matrices = simulate_lensing(truth, shapes, mis)
 
     cluster_obs, _, _ = make_test_data(
-        truth, RADII, fractional_noise=0.2, poisson_richness=False, seed=seed + 1
+        truth, RADII, fractional_noise=0.2, poisson_richness=False,
+        seed=_seed(1),
     )
 
     keep = RADII >= R_MIN_FIT
@@ -495,7 +520,7 @@ def plot_results(results):
 def main():
     print(
         f"Gamma scan: N_CLUSTERS={N_CLUSTERS}, GAMMA_VALUES={GAMMA_VALUES}, "
-        f"SEED={SEED}, N_WORKERS={N_WORKERS}",
+        f"MASTER_SEED={MASTER_SEED}, N_WORKERS={N_WORKERS}",
         flush=True,
     )
     print(f"Output directory: {OUTDIR}", flush=True)
@@ -508,7 +533,7 @@ def main():
                 r = json.load(f)
         else:
             try:
-                r = run_one_gamma(g, seed=SEED)
+                r = run_one_gamma(g)
             except Exception as exc:  # don't kill the whole scan
                 print(f"  FAILED for gamma_true = {g:+.3f}:", flush=True)
                 traceback.print_exc()
