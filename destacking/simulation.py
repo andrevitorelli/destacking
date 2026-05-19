@@ -302,3 +302,54 @@ def make_test_data(
     })
 
     return cluster_table, data_vectors, cov_matrices
+
+
+# ---------------------------------------------------------------------------
+# Simulate DES distributions
+# ---------------------------------------------------------------------------
+
+
+def des_y3_cluster_pdf(z, z_min=0.2, z_max=0.65):
+    """DES Y3 redMaPPer-like cluster n(z): volume-weighted on [z_min, z_max].
+
+    Approximation: P(z) ∝ z^2 (flat-cosmology volume element), normalised on
+    the cluster redshift range.  Captures the rough increase of cluster
+    abundance with z over the redMaPPer Y3 range without imposing a specific
+    selection function.
+    """
+    z = np.atleast_1d(z).astype(float)
+    in_range = (z >= z_min) & (z <= z_max)
+    pdf = np.where(in_range, z**2, 0.0)
+    z_grid = np.linspace(z_min, z_max, 1000)
+    norm = np.trapz(z_grid**2, z_grid)
+    return pdf / norm
+
+def sample_des_y3_cluster_z(N, rng, z_min=0.2, z_max=0.65):
+    """Draw N cluster redshifts from des_y3_cluster_pdf by inverse-CDF."""
+    z_grid = np.linspace(z_min, z_max, 5000)
+    pdf    = des_y3_cluster_pdf(z_grid, z_min, z_max)
+    cdf    = np.cumsum(pdf); cdf /= cdf[-1]
+    u      = rng.uniform(0, 1, N)
+    return np.interp(u, cdf, z_grid)
+
+def des_y3_source_pdf(z, alpha=2.0, beta=1.5, z0=0.4):
+    """DES Y3 source n(z): Smail-Schechter form  P(z) ∝ (z/z0)^alpha * exp(-(z/z0)^beta).
+
+    Defaults chosen to roughly match the combined DES Y3 metacalibration source
+    n(z) (mean ~0.65, peak near 0.4-0.5).  Cite Myles+21, MacCrann+21 for the
+    canonical SOMPZ-calibrated n(z).
+    """
+    z = np.atleast_1d(z).astype(float)
+    pdf = np.where(z > 0, (z/z0)**alpha * np.exp(-(z/z0)**beta), 0.0)
+    z_grid = np.linspace(1e-3, 5.0, 5000)
+    norm = np.trapz((z_grid/z0)**alpha * np.exp(-(z_grid/z0)**beta), z_grid)
+    return pdf / norm
+
+def sample_des_y3_source_z(N, rng, z_min=0.0, z_max=2.5,
+                           alpha=2.0, beta=1.5, z0=0.4):
+    """Draw N source redshifts from des_y3_source_pdf by inverse-CDF."""
+    z_grid = np.linspace(max(z_min, 1e-3), z_max, 5000)
+    pdf    = des_y3_source_pdf(z_grid, alpha, beta, z0)
+    cdf    = np.cumsum(pdf); cdf /= cdf[-1]
+    u      = rng.uniform(0, 1, N)
+    return np.interp(u, cdf, z_grid)
