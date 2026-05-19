@@ -126,9 +126,12 @@ _edges = np.logspace(_log_r[0] - _dlog / 2, _log_r[-1] + _dlog / 2, len(RADII) +
 BIN_LIMITS = np.column_stack([_edges[:-1], _edges[1:]])
 N_BINS = len(RADII)
 
-# Priors (matching the notebook)
+# Priors (matching the notebook).  c0 centred on the DM14 prediction
+# c_DM14(M=1e14, z=z_ref=0.35) = 4.571 — Fix A from the 2026-05-19 bias report
+# — so the c0-gamma degeneracy no longer leaks a misaligned c0 centroid into
+# a low gamma bias.
 PRIORS = {
-    "c0":         sp_norm(loc=5.0,  scale=0.5),
+    "c0":         sp_norm(loc=4.57, scale=0.05),
     "alpha":      sp_norm(loc=-0.1, scale=0.05),
     "beta":       sp_norm(loc=-0.4, scale=0.2),
     "gamma":      sp_norm(loc=0.0,  scale=1.0),
