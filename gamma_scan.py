@@ -19,10 +19,11 @@ For each value in GAMMA_VALUES the script repeats the full notebook pipeline:
   8. Extract the gamma posterior median and 68% credible interval and cache
      the summary to disk as JSON.
 
-After all gammas are processed, two plots are produced:
+After all gammas are processed, two plots are produced inside the run-specific
+output directory (see RUN_DIR below):
 
-  gamma_scan_outputs/gamma_recovered_vs_true.png   gamma_true vs gamma_post
-  gamma_scan_outputs/gamma_residuals.png           residual gamma_post - gamma_true
+  <RUN_DIR>/gamma_recovered_vs_true.png   gamma_true vs gamma_post
+  <RUN_DIR>/gamma_residuals.png           residual gamma_post - gamma_true
 
 Configuration is exposed via environment variables:
 
@@ -30,13 +31,20 @@ Configuration is exposed via environment variables:
   GAMMA_VALUES  Comma-separated gamma list     (default -0.4,-0.2,0.0,0.2,0.4)
   N_WORKERS     Pool workers for lensing/sampler (default 15)
   SEED          Master RNG seed                (default 42)
+  RUN_DIR       Explicit output directory      (default
+                gamma_scan_outputs/run_YYYY-MM-DDTHH-MM-SS).  Each invocation
+                creates a fresh timestamped subdirectory so multiple scans do
+                not clobber each other.  Point RUN_DIR at an existing folder
+                to resume a previously-cached scan.
 
-Cached results in gamma_scan_outputs/gamma_*.json are reloaded on subsequent
-invocations, so a failed run can be resumed.
+Cached results in <RUN_DIR>/gamma_*.json are reloaded on subsequent
+invocations of the same RUN_DIR, so a failed run can be resumed by passing
+RUN_DIR=<previous folder>.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
@@ -128,7 +136,14 @@ PRIORS = {
 }
 
 N_LIVE = 400
-OUTDIR = "gamma_scan_outputs"
+
+# Output directory: timestamped per run so successive scans do not clobber
+# each other.  Override via the RUN_DIR env var to resume a previous run
+# (the script will reload its cached gamma_*.json files from there).
+_DEFAULT_RUN_TS = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+OUTDIR = os.environ.get(
+    "RUN_DIR", os.path.join("gamma_scan_outputs", f"run_{_DEFAULT_RUN_TS}")
+)
 os.makedirs(OUTDIR, exist_ok=True)
 
 
@@ -480,6 +495,7 @@ def main():
         f"SEED={SEED}, N_WORKERS={N_WORKERS}",
         flush=True,
     )
+    print(f"Output directory: {OUTDIR}", flush=True)
     results = []
     for g in GAMMA_VALUES:
         cache_file = f"{OUTDIR}/gamma_{g:+.3f}.json"
