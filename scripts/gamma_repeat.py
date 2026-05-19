@@ -54,7 +54,20 @@ import datetime
 import json
 import os
 import sys
+import time
 import traceback
+
+
+def _fmt_duration(seconds):
+    """Format a duration in seconds as a short human-readable string."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    if seconds < 3600:
+        m, s = divmod(seconds, 60)
+        return f"{int(m)}m{int(s):02d}s"
+    h, rem = divmod(seconds, 3600)
+    m = rem / 60
+    return f"{int(h)}h{int(m):02d}m"
 
 import matplotlib
 
@@ -98,6 +111,8 @@ try:
 except ImportError:
     corner = None
 
+import warnings
+warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 # ── Configuration (mirrors notebook) ────────────────────────────────────────
 N_REALISATIONS = int(os.environ.get("N_REALISATIONS", 20))
@@ -641,9 +656,6 @@ def run_one_realisation(idx, run_dir):
 
     summary_path = os.path.join(subdir, "summary.json")
     npz_path     = os.path.join(subdir, "gamma_posterior.npz")
-    if os.path.exists(summary_path) and os.path.exists(npz_path):
-        print(f"  -> cached, skipping recomputation", flush=True)
-        return json.load(open(summary_path))
 
     print("  building truth catalogue ...", flush=True)
     truth, ols = build_truth_catalog(TRUE_GAMMA)
@@ -854,15 +866,52 @@ def main():
     plot_des_y3_nz(RUN_DIR)
 
     results = []
-    for k in range(N_REALISATIONS):
-        print(f"\n[{k + 1}/{N_REALISATIONS}] realisation_{k:03d}", flush=True)
+    durations = []                         # freshly-computed iteration times only
+    total = N_REALISATIONS
+    run_t0 = time.time()
+    for k in range(total):
+        subdir = os.path.join(RUN_DIR, f"realisation_{k:03d}")
+        summary_path = os.path.join(subdir, "summary.json")
+        npz_path     = os.path.join(subdir, "gamma_posterior.npz")
+        if os.path.exists(summary_path) and os.path.exists(npz_path):
+            print(
+                f"\n[{k + 1}/{total}] realisation_{k:03d} -- cached, loading",
+                flush=True,
+            )
+            with open(summary_path) as f:
+                results.append(json.load(f))
+            continue
+
+        print(f"\n[{k + 1}/{total}] realisation_{k:03d}", flush=True)
+        iter_t0 = time.time()
         try:
             r = run_one_realisation(k, RUN_DIR)
-            results.append(r)
         except Exception as exc:
             print(f"  FAILED for realisation {k}:", flush=True)
             traceback.print_exc()
             continue
+        iter_dt = time.time() - iter_t0
+        durations.append(iter_dt)
+        results.append(r)
+
+        remaining = total - (k + 1)
+        avg = sum(durations) / len(durations)
+        eta = avg * remaining
+        print(
+            f"  [{k + 1}/{total}] iteration took {_fmt_duration(iter_dt)}; "
+            f"avg {_fmt_duration(avg)}; "
+            f"ETA {_fmt_duration(eta)} for {remaining} remaining iteration"
+            f"{'s' if remaining != 1 else ''}",
+            flush=True,
+        )
+
+    total_elapsed = time.time() - run_t0
+    print(
+        f"\nTotal wall time: {_fmt_duration(total_elapsed)}  "
+        f"({len(durations)} fresh realisation"
+        f"{'s' if len(durations) != 1 else ''} timed)",
+        flush=True,
+    )
 
     if not results:
         print("No successful realisations; nothing to aggregate.", file=sys.stderr)

@@ -49,7 +49,20 @@ import datetime
 import json
 import os
 import sys
+import time
 import traceback
+
+
+def _fmt_duration(seconds):
+    """Format a duration in seconds as a short human-readable string."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    if seconds < 3600:
+        m, s = divmod(seconds, 60)
+        return f"{int(m)}m{int(s):02d}s"
+    h, rem = divmod(seconds, 3600)
+    m = rem / 60
+    return f"{int(h)}h{int(m):02d}m"
 
 import matplotlib
 
@@ -525,22 +538,53 @@ def main():
     )
     print(f"Output directory: {OUTDIR}", flush=True)
     results = []
-    for g in GAMMA_VALUES:
+    durations = []                         # freshly-computed iteration times only
+    total = len(GAMMA_VALUES)
+    scan_t0 = time.time()
+    for k, g in enumerate(GAMMA_VALUES):
         cache_file = f"{OUTDIR}/gamma_{g:+.3f}.json"
         if os.path.exists(cache_file):
-            print(f"\nLoading cached result for gamma_true = {g:+.3f}", flush=True)
+            print(
+                f"\n[{k + 1}/{total}] gamma_true = {g:+.3f} -- cached, loading",
+                flush=True,
+            )
             with open(cache_file) as f:
                 r = json.load(f)
-        else:
-            try:
-                r = run_one_gamma(g)
-            except Exception as exc:  # don't kill the whole scan
-                print(f"  FAILED for gamma_true = {g:+.3f}:", flush=True)
-                traceback.print_exc()
-                continue
-            with open(cache_file, "w") as f:
-                json.dump(r, f, indent=2)
+            results.append(r)
+            continue
+
+        iter_t0 = time.time()
+        try:
+            r = run_one_gamma(g)
+        except Exception as exc:  # don't kill the whole scan
+            print(f"  FAILED for gamma_true = {g:+.3f}:", flush=True)
+            traceback.print_exc()
+            continue
+        iter_dt = time.time() - iter_t0
+        durations.append(iter_dt)
+
+        with open(cache_file, "w") as f:
+            json.dump(r, f, indent=2)
         results.append(r)
+
+        remaining = total - (k + 1)
+        avg = sum(durations) / len(durations)
+        eta = avg * remaining
+        print(
+            f"  [{k + 1}/{total}] iteration took {_fmt_duration(iter_dt)}; "
+            f"avg {_fmt_duration(avg)}; "
+            f"ETA {_fmt_duration(eta)} for {remaining} remaining iteration"
+            f"{'s' if remaining != 1 else ''}",
+            flush=True,
+        )
+
+    total_elapsed = time.time() - scan_t0
+    print(
+        f"\nScan total wall time: {_fmt_duration(total_elapsed)}  "
+        f"({len(durations)} fresh iteration"
+        f"{'s' if len(durations) != 1 else ''} timed)",
+        flush=True,
+    )
 
     if not results:
         print("No successful runs; nothing to plot.", file=sys.stderr)
