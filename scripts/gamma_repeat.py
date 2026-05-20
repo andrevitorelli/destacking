@@ -159,7 +159,7 @@ PRIORS = {
     "c0":         sp_norm(loc=4.57, scale=0.05),
     "alpha":      sp_norm(loc=-0.1, scale=0.05),
     "beta":       sp_norm(loc=-0.4, scale=0.2),
-    "gamma":      sp_norm(loc=0.0,  scale=5.0),
+    "gamma":      sp_norm(loc=0.0,  scale=1.),
     "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
 }
 PRIOR_LABELS = {
@@ -169,7 +169,7 @@ PRIOR_LABELS = {
 PARAM_ORDER = ["c0", "alpha", "beta", "gamma", "log_M_norm"]
 
 N_LIVE = 400
-
+TIMEOUT = 600
 _DEFAULT_RUN_TS = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 RUN_DIR = os.environ.get(
     "RUN_DIR", os.path.join("gamma_repeat_outputs", f"run_{_DEFAULT_RUN_TS}")
@@ -700,7 +700,7 @@ def run_one_realisation(idx, run_dir):
         priors=PRIORS, delta_m_ref=DELTA_M_REF, fit_beta=True,
         FMISS=FMISS_FIT, SIGMA_OFF=SIGMA_OFF_FIT,
         n_live=N_LIVE, pool=N_WORKERS,
-        verbose=True, filepath=checkpoint, resume=True,
+        verbose=True, filepath=checkpoint, resume=True, timeout= TIMEOUT,
     )
     points, log_w, log_l = sampler.posterior()
     weights = np.exp(log_w - log_w.max())

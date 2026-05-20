@@ -360,6 +360,7 @@ def run_sampler_combined(
     verbose=True,
     filepath=None,
     resume=True,
+    timeout=600,
 ):
     """
     Run the nautilus nested sampler for the combined M–c + magnitude-gap model.
@@ -437,6 +438,8 @@ def run_sampler_combined(
     resume : bool
         If ``True`` (default) and ``filepath`` exists, resume from the saved
         state.  Has no effect when ``filepath`` is ``None``.
+    timeout : int
+        Time in seconds to complete the sampler run.
 
     Returns
     -------
@@ -493,5 +496,5 @@ def run_sampler_combined(
         n_live=n_live, pool=pool,
         filepath=filepath, resume=resume,
     )
-    sampler.run(verbose=verbose)
+    sampler.run(verbose=verbose,timeout=timeout)
     return sampler
