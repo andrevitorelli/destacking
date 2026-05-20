@@ -241,3 +241,130 @@ def test_make_test_data_seed_reproducible(truth_for_data):
     _, d1, _ = make_test_data(truth_for_data, RADII, seed=99)
     _, d2, _ = make_test_data(truth_for_data, RADII, seed=99)
     np.testing.assert_array_equal(d1, d2)
+
+
+# ---------------------------------------------------------------------------
+# DES Y3 cluster n(z): des_y3_cluster_pdf + sample_des_y3_cluster_z
+# ---------------------------------------------------------------------------
+
+from destacking.simulation import (
+    des_y3_cluster_pdf,
+    sample_des_y3_cluster_z,
+    des_y3_source_pdf,
+    sample_des_y3_source_z,
+)
+
+
+def test_des_y3_cluster_pdf_zero_outside_range():
+    p = des_y3_cluster_pdf(np.array([0.0, 0.1, 0.19, 0.66, 1.0]),
+                           z_min=0.2, z_max=0.65)
+    assert np.all(p == 0.0)
+
+
+def test_des_y3_cluster_pdf_positive_inside_range():
+    z = np.linspace(0.2, 0.65, 50)
+    p = des_y3_cluster_pdf(z, z_min=0.2, z_max=0.65)
+    assert np.all(p > 0.0)
+
+
+def test_des_y3_cluster_pdf_normalised():
+    z = np.linspace(0.2, 0.65, 5000)
+    p = des_y3_cluster_pdf(z, z_min=0.2, z_max=0.65)
+    integral = np.trapezoid(p, z) if hasattr(np, "trapezoid") else np.trapz(p, z)
+    np.testing.assert_allclose(integral, 1.0, rtol=1e-3)
+
+
+def test_sample_des_y3_cluster_z_in_range():
+    rng = np.random.default_rng(0)
+    z = sample_des_y3_cluster_z(2000, rng, z_min=0.2, z_max=0.65)
+    assert z.shape == (2000,)
+    assert np.all(z >= 0.2) and np.all(z <= 0.65)
+
+
+def test_sample_des_y3_cluster_z_volume_weighted():
+    # P(z) ∝ z**2 puts more weight at higher z; the sample mean should
+    # exceed the midpoint (0.425) of the range.
+    rng = np.random.default_rng(1)
+    z = sample_des_y3_cluster_z(5000, rng, z_min=0.2, z_max=0.65)
+    assert z.mean() > 0.425
+
+
+def test_sample_des_y3_cluster_z_reproducible():
+    rng1 = np.random.default_rng(7)
+    rng2 = np.random.default_rng(7)
+    z1 = sample_des_y3_cluster_z(500, rng1)
+    z2 = sample_des_y3_cluster_z(500, rng2)
+    np.testing.assert_array_equal(z1, z2)
+
+
+# ---------------------------------------------------------------------------
+# DES Y3 source n(z): des_y3_source_pdf + sample_des_y3_source_z
+# ---------------------------------------------------------------------------
+
+def test_des_y3_source_pdf_zero_at_zero():
+    # Smail-Schechter is zero at z=0 because (z/z0)**alpha vanishes.
+    p = des_y3_source_pdf(np.array([0.0]))
+    assert p[0] == 0.0
+
+
+def test_des_y3_source_pdf_positive_for_positive_z():
+    z = np.linspace(0.05, 2.5, 50)
+    p = des_y3_source_pdf(z, alpha=2.0, beta=1.5, z0=0.4)
+    assert np.all(p > 0.0)
+
+
+def test_des_y3_source_pdf_normalised():
+    z = np.linspace(0.001, 5.0, 5000)
+    p = des_y3_source_pdf(z, alpha=2.0, beta=1.5, z0=0.4)
+    integral = np.trapezoid(p, z) if hasattr(np, "trapezoid") else np.trapz(p, z)
+    # The PDF is normalised on z in [1e-3, 5]; allow some integration error.
+    np.testing.assert_allclose(integral, 1.0, rtol=5e-3)
+
+
+def test_sample_des_y3_source_z_in_range():
+    rng = np.random.default_rng(0)
+    z = sample_des_y3_source_z(2000, rng, z_min=0.0, z_max=2.5,
+                                 alpha=2.0, beta=1.5, z0=0.4)
+    assert z.shape == (2000,)
+    assert np.all(z >= 0.0) and np.all(z <= 2.5)
+
+
+def test_sample_des_y3_source_z_mean_near_expected():
+    # Smail with alpha=2, beta=1.5, z0=0.4 → sample mean ≈ 0.65–0.7.
+    rng = np.random.default_rng(0)
+    z = sample_des_y3_source_z(5000, rng, alpha=2.0, beta=1.5, z0=0.4)
+    assert 0.5 < z.mean() < 0.85
+
+
+def test_sample_des_y3_source_z_reproducible():
+    rng1 = np.random.default_rng(11)
+    rng2 = np.random.default_rng(11)
+    z1 = sample_des_y3_source_z(500, rng1)
+    z2 = sample_des_y3_source_z(500, rng2)
+    np.testing.assert_array_equal(z1, z2)
+
+
+# ---------------------------------------------------------------------------
+# simcluster — wraps xlensing.sims.make_simple_random_cat +
+# xlensing.sims.apply_NFW_shear_region.  Run a minimal smoke test that
+# verifies it returns an astropy Table with the expected columns and the
+# right number of rows.
+# ---------------------------------------------------------------------------
+
+def test_simcluster_smoke():
+    from destacking.simulation import simcluster
+    import xlensing  # noqa: F401  -- only run if xlensing is importable
+
+    # A 14-Msun cluster at z=0.3, c=5, ra/dec/z = 0,0,0.3
+    cluster = [0.0, 0.0, 0.3, 1e14, 5.0]
+    cat = simcluster(
+        gal_density=5,    # low density to keep the call fast
+        total_radius=2.0,
+        z_range=(0.4, 1.5),
+        cluster=cluster,
+        shape_noise=0.0,
+        seed=42,
+    )
+    assert set(["ra", "dec", "z", "e1", "e2",
+                "R11", "R12", "R21", "R22", "w"]).issubset(cat.colnames)
+    assert len(cat) > 0

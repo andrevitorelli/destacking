@@ -1,7 +1,12 @@
 import numpy as np
 import pytest
-from scipy.stats import multivariate_normal
-from destacking.fitting import cholog_gaussian, log_likelihood
+from scipy.stats import multivariate_normal, norm as sp_norm
+from destacking.fitting import (
+    cholog_gaussian,
+    log_likelihood,
+    log_likelihood_mc,
+    log_likelihood_combined,
+)
 from destacking.simulation import generate_truth_catalog, make_test_data
 
 RADII = np.logspace(-0.6, 0.6, 8)
@@ -139,3 +144,161 @@ def test_log_likelihood_log_M_norm_changes_result(test_dataset):
     ll_0   = log_likelihood(TRUTH_GAMMA, cluster_obs, data, covs, RADII, log_M_norm=0.0)
     ll_off = log_likelihood(TRUTH_GAMMA, cluster_obs, data, covs, RADII, log_M_norm=0.5)
     assert ll_0 != ll_off
+
+
+# ---------------------------------------------------------------------------
+# log_likelihood_mc — parametric M-c
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def mc_dataset():
+    truth = generate_truth_catalog(20, seed=42, delta_m_gamma=0.0)
+    cluster_obs, data_vectors, cov_matrices = make_test_data(
+        truth, RADII, fractional_noise=0.2, poisson_richness=False, seed=7,
+    )
+    return cluster_obs, data_vectors, cov_matrices
+
+
+def test_log_likelihood_mc_finite(mc_dataset):
+    cluster_obs, data, cov = mc_dataset
+    ll = log_likelihood_mc(5.0, -0.1, cluster_obs, data, cov, RADII)
+    assert np.isfinite(ll)
+
+
+def test_log_likelihood_mc_c0_zero_returns_neg_inf(mc_dataset):
+    cluster_obs, data, cov = mc_dataset
+    assert log_likelihood_mc(0.0, -0.1, cluster_obs, data, cov, RADII) == -np.inf
+    assert log_likelihood_mc(-3.0, -0.1, cluster_obs, data, cov, RADII) == -np.inf
+
+
+def test_log_likelihood_mc_truth_beats_offset(mc_dataset):
+    # Larger c0 offset from a plausible truth should give a worse fit
+    cluster_obs, data, cov = mc_dataset
+    ll_good = log_likelihood_mc(5.0, -0.1, cluster_obs, data, cov, RADII)
+    ll_bad  = log_likelihood_mc(50.0, -0.1, cluster_obs, data, cov, RADII)
+    assert ll_good > ll_bad
+
+
+# ---------------------------------------------------------------------------
+# log_likelihood_combined — M-c + gamma
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def combined_dataset():
+    truth = generate_truth_catalog(20, seed=42, delta_m_gamma=0.0)
+    cluster_obs, data_vectors, cov_matrices = make_test_data(
+        truth, RADII, fractional_noise=0.2, poisson_richness=False, seed=7,
+    )
+    return cluster_obs, data_vectors, cov_matrices
+
+
+def test_log_likelihood_combined_finite(combined_dataset):
+    cluster_obs, data, cov = combined_dataset
+    ll = log_likelihood_combined(5.0, -0.1, 0.0, cluster_obs, data, cov, RADII)
+    assert np.isfinite(ll)
+
+
+def test_log_likelihood_combined_c0_invalid_returns_neg_inf(combined_dataset):
+    cluster_obs, data, cov = combined_dataset
+    assert log_likelihood_combined(0.0, -0.1, 0.0,
+                                   cluster_obs, data, cov, RADII) == -np.inf
+
+
+def test_log_likelihood_combined_extreme_gamma_returns_neg_inf(combined_dataset):
+    # Extreme gamma + small delta_m_ref overflows the forward model;
+    # the NaN-guard must convert this to -inf (not NaN).
+    cluster_obs, data, cov = combined_dataset
+    ll = log_likelihood_combined(
+        5.0, -0.1, 500.0, cluster_obs, data, cov, RADII,
+        delta_m_ref=1e-4,
+    )
+    assert ll == -np.inf
+
+
+def test_log_likelihood_combined_never_returns_nan(combined_dataset):
+    # Sweep a wide range of parameters; output must always be finite or -inf.
+    cluster_obs, data, cov = combined_dataset
+    rng = np.random.default_rng(0)
+    for _ in range(15):
+        c0    = float(rng.uniform(0.5, 20.0))
+        alpha = float(rng.uniform(-0.5, 0.5))
+        gamma = float(rng.uniform(-5.0, 5.0))
+        ll = log_likelihood_combined(c0, alpha, gamma,
+                                     cluster_obs, data, cov, RADII)
+        assert not np.isnan(ll), (
+            f"NaN return for (c0,alpha,gamma)=({c0},{alpha},{gamma})"
+        )
+
+
+def test_log_likelihood_combined_gamma_zero_matches_mc(combined_dataset):
+    # gamma=0 should yield the same log-likelihood as the bare M-c version.
+    cluster_obs, data, cov = combined_dataset
+    ll_combined = log_likelihood_combined(
+        5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+        beta=-0.3, log_M_norm=0.0,
+    )
+    ll_mc = log_likelihood_mc(
+        5.0, -0.1, cluster_obs, data, cov, RADII,
+        beta=-0.3, log_M_norm=0.0,
+    )
+    assert np.isclose(ll_combined, ll_mc, rtol=1e-10)
+
+
+def test_log_likelihood_combined_FMISS_changes_value(combined_dataset):
+    cluster_obs, data, cov = combined_dataset
+    N = len(cluster_obs)
+    ll_centred = log_likelihood_combined(
+        5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+        FMISS=np.zeros(N), SIGMA_OFF=np.ones(N) * 0.3,
+    )
+    ll_misc = log_likelihood_combined(
+        5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+        FMISS=np.ones(N), SIGMA_OFF=np.ones(N) * 0.3,
+    )
+    assert ll_centred != ll_misc
+
+
+# ---------------------------------------------------------------------------
+# Sampler smoke tests — minimal n_live to keep total wall time small.
+# Marked as `slow` so users can de-select with -m "not slow".
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_run_sampler_mc_runs_and_returns_finite(mc_dataset):
+    from destacking.fitting import run_sampler_mc
+    cluster_obs, data, cov = mc_dataset
+    sampler = run_sampler_mc(
+        cluster_obs, data, cov, RADII,
+        n_live=30, fit_beta=False, verbose=False,
+    )
+    points, log_w, log_l = sampler.posterior()
+    # Nautilus may return -inf log-weights for points with vanishing
+    # likelihood; what we require is that the sampler ran, produced points,
+    # and contains at least some finite-weight samples.
+    assert points.shape[0] > 0
+    assert np.any(np.isfinite(log_w))
+    # No NaNs
+    assert not np.any(np.isnan(log_w))
+
+
+@pytest.mark.slow
+def test_run_sampler_combined_runs_and_returns_finite(combined_dataset):
+    from destacking.fitting import run_sampler_combined
+    cluster_obs, data, cov = combined_dataset
+    priors = {
+        "c0":         sp_norm(loc=5.0, scale=0.5),
+        "alpha":      sp_norm(loc=-0.1, scale=0.05),
+        "beta":       sp_norm(loc=-0.4, scale=0.2),
+        "gamma":      sp_norm(loc=0.0,  scale=1.0),
+        "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
+    }
+    sampler = run_sampler_combined(
+        cluster_obs, data, cov, RADII,
+        priors=priors, fit_beta=True,
+        n_live=30, verbose=False,
+    )
+    points, log_w, log_l = sampler.posterior()
+    assert points.shape[0] > 0
+    assert points.shape[1] == 5  # c0, alpha, beta, gamma, log_M_norm
+    assert np.any(np.isfinite(log_w))
+    assert not np.any(np.isnan(log_w))

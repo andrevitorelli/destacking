@@ -160,3 +160,37 @@ def test_lum_BCG_vectorized():
     L = lum_BCG_zheng07(M)
     assert L.shape == (3,)
     assert np.all(L > 0)
+
+
+# ---------------------------------------------------------------------------
+# sample_halo_masses_tinker08
+# ---------------------------------------------------------------------------
+
+def test_sample_halo_masses_tinker08_shape_and_range():
+    from destacking.relations import sample_halo_masses_tinker08
+    rng = np.random.default_rng(0)
+    z = np.array([0.2, 0.3, 0.4, 0.5])
+    M = sample_halo_masses_tinker08(z, logM_min=13.5, logM_max=15.0, rng=rng)
+    assert M.shape == z.shape
+    logM = np.log10(M)
+    assert np.all(logM >= 13.5)
+    assert np.all(logM <= 15.0)
+
+
+def test_sample_halo_masses_tinker08_reproducible():
+    from destacking.relations import sample_halo_masses_tinker08
+    z = np.array([0.3, 0.5])
+    rng1 = np.random.default_rng(123)
+    rng2 = np.random.default_rng(123)
+    M1 = sample_halo_masses_tinker08(z, logM_min=13.5, logM_max=15.0, rng=rng1)
+    M2 = sample_halo_masses_tinker08(z, logM_min=13.5, logM_max=15.0, rng=rng2)
+    np.testing.assert_array_equal(M1, M2)
+
+
+def test_sample_halo_masses_tinker08_scalar_z_accepted():
+    # Function uses np.atleast_1d internally so a scalar z must work.
+    from destacking.relations import sample_halo_masses_tinker08
+    rng = np.random.default_rng(0)
+    M = sample_halo_masses_tinker08(0.3, logM_min=13.5, logM_max=15.0, rng=rng)
+    assert M.shape == (1,)
+    assert 10**13.5 <= M[0] <= 10**15.0
