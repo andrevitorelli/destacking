@@ -11,30 +11,39 @@ from scipy.stats import truncnorm as sp_truncnorm, norm as sp_norm, uniform as s
 def cholog_gaussian(data_vectors, cov_matrices):
     """
     Simultaneous fitting of N datavectors of size k.
-    Optimized using Cholesky decomposition for better numerical stability
+    Optimized using Cholesky decomposition for better numerical stability.
+
+    Returns ``-np.inf`` if any cluster yields a non-finite contribution
+    (NaN or +/-inf) — for example when the residual vector contains NaN
+    because the forward model overflowed under extreme parameter draws.
+    The nautilus sampler is happy with ``-np.inf`` but treats NaN as a
+    silent failure (``f_live = nan``), so we never return NaN.
     """
     n, k = data_vectors.shape
-    total_log_lik = 0
+    total_log_lik = 0.0
     log_2pi = np.log(2 * np.pi)
-    
+
     for i in range(n):
-        # Cholesky decomposition
+        # If the residual itself is non-finite there is no information in
+        # this cluster; bail out immediately rather than propagating NaN
+        # through the linear solve.
+        if not np.all(np.isfinite(data_vectors[i])):
+            return -np.inf
         try:
             L = np.linalg.cholesky(cov_matrices[i])
             # Solve L * y = x (forward substitution)
             y = np.linalg.solve(L, data_vectors[i])
-            # Compute quadratic form
-            quad_form = np.sum(y**2)
-            # Log determinant
-            log_det = 2 * np.sum(np.log(np.diag(L)))
-            
-            # Log likelihood
+            quad_form = np.sum(y ** 2)
+            log_det = 2.0 * np.sum(np.log(np.diag(L)))
             log_lik = -0.5 * (k * log_2pi + log_det + quad_form)
-            total_log_lik += log_lik
-            
-        except np.linalg.LinAlgError:
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError):
             return -np.inf
+        if not np.isfinite(log_lik):
+            return -np.inf
+        total_log_lik += log_lik
 
+    if not np.isfinite(total_log_lik):
+        return -np.inf
     return total_log_lik
 
 
@@ -57,13 +66,16 @@ def log_likelihood(
 
     Evaluates cholog_gaussian on (data − model) residuals.
 
-    Returns -inf for unphysical parameter values or if the forward model
-    raises an exception.
+    Returns -inf for unphysical parameter values, for forward-model values
+    that contain NaN/inf, or if the forward model raises an exception.
     """
     try:
         model     = forward_model(gamma, cluster_table, radii, c_pivot_0, delta_m_ref, log_M_norm)
+        if not np.all(np.isfinite(model)):
+            return -np.inf
         residuals = data_vectors - model
-        return cholog_gaussian(residuals, cov_matrices)
+        ll = cholog_gaussian(residuals, cov_matrices)
+        return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
 
@@ -170,7 +182,8 @@ def log_likelihood_mc(
     """
     Log-likelihood for the M–c relation parameters given ΔΣ data.
 
-    Returns -inf for unphysical c0 or if the forward model raises.
+    Returns -inf for unphysical c0, for NaN/inf in the forward model, or
+    if the forward model raises.
     """
     if c0 <= 0:
         return -np.inf
@@ -178,8 +191,11 @@ def log_likelihood_mc(
         model     = forward_model_mc(c0, alpha, cluster_table, radii,
                                      beta=beta, M_pivot_log=M_pivot_log,
                                      z_ref=z_ref, log_M_norm=log_M_norm)
+        if not np.all(np.isfinite(model)):
+            return -np.inf
         residuals = data_vectors - model
-        return cholog_gaussian(residuals, cov_matrices)
+        ll = cholog_gaussian(residuals, cov_matrices)
+        return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
 
@@ -313,7 +329,9 @@ def log_likelihood_combined(
     fixed per-cluster miscentering / BCG arrays.  Default None means centered
     NFW with no BCG.
 
-    Returns -inf for unphysical c0 or if the forward model raises.
+    Returns -inf for unphysical c0, for NaN/inf in the forward model, or
+    if the forward model raises.  Never returns NaN: nautilus would
+    otherwise report ``f_live = nan`` and silently produce a bad chain.
     """
     if c0 <= 0:
         return -np.inf
@@ -324,8 +342,11 @@ def log_likelihood_combined(
             delta_m_ref=delta_m_ref, log_M_norm=log_M_norm,
             FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
         )
+        if not np.all(np.isfinite(model)):
+            return -np.inf
         residuals = data_vectors - model
-        return cholog_gaussian(residuals, cov_matrices)
+        ll = cholog_gaussian(residuals, cov_matrices)
+        return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
 
