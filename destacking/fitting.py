@@ -8,17 +8,50 @@ from destacking.model import (
 from scipy.stats import truncnorm as sp_truncnorm, norm as sp_norm, uniform as sp_uniform
 
 
-def cholog_gaussian(data_vectors, cov_matrices):
+def cholog_gaussian(data_vectors, cov_matrices,
+                    coh_vectors=None, coh_amplitude=0.0):
     """
-    Simultaneous fitting of N datavectors of size k.
-    Optimized using Cholesky decomposition for better numerical stability.
+    Simultaneous Gaussian log-likelihood for N data vectors of size k,
+    with optional per-cluster rank-1 covariance inflation.
 
-    Returns ``-np.inf`` if any cluster yields a non-finite contribution
-    (NaN or +/-inf) — for example when the residual vector contains NaN
-    because the forward model overflowed under extreme parameter draws.
+    The per-cluster effective covariance is
+        C_eff_i = C_i + u_i u_i^T,    u_i = coh_amplitude * coh_vectors[i]
+    which encodes a fully coherent per-cluster amplitude scatter at the
+    fractional level ``coh_amplitude`` when ``coh_vectors`` is the
+    per-cluster model profile.  This captures the missing variance from
+    triaxiality and miscentering that is correlated across radial bins of
+    the same cluster but uncorrelated cluster-to-cluster.  The Cholesky
+    factor of C_i is reused via Sherman–Morrison so we never form the
+    dense inflated covariance:
+
+        log|C_eff|     = log|C| + log(1 + u^T C^-1 u)
+        r^T C_eff^-1 r = r^T C^-1 r - (r^T C^-1 u)^2 / (1 + u^T C^-1 u)
+
+    With ``coh_amplitude == 0`` (default) the function reduces to the bare
+    shape-noise likelihood.
+
+    Returns ``-np.inf`` if any cluster yields a non-finite contribution.
     The nautilus sampler is happy with ``-np.inf`` but treats NaN as a
     silent failure (``f_live = nan``), so we never return NaN.
+
+    Parameters
+    ----------
+    data_vectors : ndarray (N, k)
+        Per-cluster residual vectors (data minus model).
+    cov_matrices : ndarray (N, k, k)
+        Per-cluster covariance matrices (shape-noise only).
+    coh_vectors : ndarray (N, k) or None
+        Per-cluster rank-1 direction; typically the forward-model profile
+        ``m_i`` itself so that the inflation is a fractional amplitude
+        scatter.  Required when ``coh_amplitude > 0``; ignored otherwise.
+    coh_amplitude : float
+        Fractional coherent scatter (e.g. 0.25 for 25% per-cluster
+        amplitude jitter).  Must be >= 0.  Default 0 -> no inflation.
     """
+    if coh_amplitude < 0:
+        return -np.inf
+    use_rank1 = (coh_vectors is not None) and (coh_amplitude > 0.0)
+
     n, k = data_vectors.shape
     total_log_lik = 0.0
     log_2pi = np.log(2 * np.pi)
@@ -29,12 +62,28 @@ def cholog_gaussian(data_vectors, cov_matrices):
         # through the linear solve.
         if not np.all(np.isfinite(data_vectors[i])):
             return -np.inf
+        if use_rank1 and not np.all(np.isfinite(coh_vectors[i])):
+            return -np.inf
         try:
             L = np.linalg.cholesky(cov_matrices[i])
-            # Solve L * y = x (forward substitution)
+            # Solve L * y = r  -> y = L^-1 r,  r^T C^-1 r = y^T y
             y = np.linalg.solve(L, data_vectors[i])
-            quad_form = np.sum(y ** 2)
-            log_det = 2.0 * np.sum(np.log(np.diag(L)))
+            quad_form = float(np.dot(y, y))
+            log_det = 2.0 * float(np.sum(np.log(np.diag(L))))
+
+            if use_rank1:
+                u = coh_amplitude * coh_vectors[i]
+                # Solve L * w = u  -> w = L^-1 u,  u^T C^-1 u = w^T w
+                w = np.linalg.solve(L, u)
+                uCu = float(np.dot(w, w))
+                denom = 1.0 + uCu
+                # Sherman–Morrison update of the quadratic form:
+                #   r^T C_eff^-1 r = quad_form - (y^T w)^2 / denom
+                cross = float(np.dot(y, w))
+                quad_form = quad_form - cross * cross / denom
+                # ... and of the log-determinant: + log(1 + uCu)
+                log_det = log_det + np.log(denom)
+
             log_lik = -0.5 * (k * log_2pi + log_det + quad_form)
         except (np.linalg.LinAlgError, ValueError, FloatingPointError):
             return -np.inf
@@ -60,11 +109,15 @@ def log_likelihood(
     c_pivot_0=1.0,
     delta_m_ref=1.0,
     log_M_norm=0.0,
+    coh_amplitude=0.0,
 ):
     """
     Log-likelihood for gamma given cluster observables and ΔΣ data.
 
-    Evaluates cholog_gaussian on (data − model) residuals.
+    Evaluates cholog_gaussian on (data − model) residuals.  When
+    ``coh_amplitude > 0`` the per-cluster covariance is inflated by a
+    rank-1 term ``(coh_amplitude * m_i)(coh_amplitude * m_i)^T`` to absorb
+    coherent per-cluster amplitude scatter from triaxiality/miscentering.
 
     Returns -inf for unphysical parameter values, for forward-model values
     that contain NaN/inf, or if the forward model raises an exception.
@@ -74,7 +127,10 @@ def log_likelihood(
         if not np.all(np.isfinite(model)):
             return -np.inf
         residuals = data_vectors - model
-        ll = cholog_gaussian(residuals, cov_matrices)
+        ll = cholog_gaussian(
+            residuals, cov_matrices,
+            coh_vectors=model, coh_amplitude=coh_amplitude,
+        )
         return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
@@ -178,9 +234,14 @@ def log_likelihood_mc(
     M_pivot_log=_MC_M_PIVOT_LOG,
     z_ref=_MC_Z_REF,
     log_M_norm=0.0,
+    coh_amplitude=0.0,
 ):
     """
     Log-likelihood for the M–c relation parameters given ΔΣ data.
+
+    When ``coh_amplitude > 0`` the per-cluster covariance is inflated by a
+    rank-1 term ``(coh_amplitude * m_i)(coh_amplitude * m_i)^T`` to
+    absorb coherent per-cluster amplitude scatter.
 
     Returns -inf for unphysical c0, for NaN/inf in the forward model, or
     if the forward model raises.
@@ -194,7 +255,10 @@ def log_likelihood_mc(
         if not np.all(np.isfinite(model)):
             return -np.inf
         residuals = data_vectors - model
-        ll = cholog_gaussian(residuals, cov_matrices)
+        ll = cholog_gaussian(
+            residuals, cov_matrices,
+            coh_vectors=model, coh_amplitude=coh_amplitude,
+        )
         return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
@@ -321,13 +385,23 @@ def log_likelihood_combined(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
+    coh_amplitude=0.0,
 ):
     """
     Log-likelihood for the combined M–c + magnitude-gap model.
 
-    FMISS, SIGMA_OFF, BCG_B_MASS are passed through to forward_model_combined as
-    fixed per-cluster miscentering / BCG arrays.  Default None means centered
-    NFW with no BCG.
+    FMISS, SIGMA_OFF, BCG_B_MASS are passed through to forward_model_combined
+    as fixed per-cluster miscentering / BCG arrays.  Default None means
+    centered NFW with no BCG.
+
+    ``coh_amplitude`` enables a rank-1 covariance inflation that captures
+    the coherent per-cluster amplitude scatter from triaxiality and
+    miscentering realisation.  The effective covariance for cluster i is
+    ``C_i + (coh_amplitude * m_i)(coh_amplitude * m_i)^T`` where m_i is
+    the current forward-model profile, so the inflation is a fractional
+    amplitude jitter that scales with the predicted ΔΣ.  Set to ~0.25
+    for a 25% per-cluster coherent scatter; 0 (default) means no
+    inflation.
 
     Returns -inf for unphysical c0, for NaN/inf in the forward model, or
     if the forward model raises.  Never returns NaN: nautilus would
@@ -345,7 +419,10 @@ def log_likelihood_combined(
         if not np.all(np.isfinite(model)):
             return -np.inf
         residuals = data_vectors - model
-        ll = cholog_gaussian(residuals, cov_matrices)
+        ll = cholog_gaussian(
+            residuals, cov_matrices,
+            coh_vectors=model, coh_amplitude=coh_amplitude,
+        )
         return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
@@ -376,6 +453,7 @@ def run_sampler_combined(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
+    coh_amplitude=0.0,
     n_live=400,
     pool=None,
     verbose=True,
@@ -510,6 +588,7 @@ def run_sampler_combined(
             FMISS=FMISS,
             SIGMA_OFF=SIGMA_OFF,
             BCG_B_MASS=BCG_B_MASS,
+            coh_amplitude=coh_amplitude,
         )
 
     sampler = Sampler(

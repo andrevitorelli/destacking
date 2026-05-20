@@ -160,7 +160,7 @@ PRIORS = {
     "c0":         sp_norm(loc=4.57, scale=0.05),
     "alpha":      sp_norm(loc=-0.1, scale=0.05),
     "beta":       sp_norm(loc=-0.4, scale=0.2),
-    "gamma":      sp_norm(loc=0.0,  scale=1.5),
+    "gamma":      sp_norm(loc=0.0,  scale=3.5),
     "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
 }
 PRIOR_LABELS = {
@@ -171,6 +171,15 @@ PARAM_ORDER = ["c0", "alpha", "beta", "gamma", "log_M_norm"]
 
 N_LIVE = 400
 TIMEOUT = 600
+
+# Per-cluster coherent-scatter fraction (rank-1 covariance inflation).
+# 0.0 (default) reproduces the previous shape-noise-only likelihood; ~0.25
+# inflates each cluster's covariance by  (coh * m_i)(coh * m_i)^T  to
+# absorb the per-cluster amplitude jitter from triaxiality and
+# miscentering realisation -- the proposed Fix #2 of the latest
+# calibration analysis.
+COH_AMPLITUDE = float(os.environ.get("COH_AMPLITUDE", 0.0))
+
 _DEFAULT_RUN_TS = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 RUN_DIR = os.environ.get(
     "RUN_DIR", os.path.join("gamma_repeat_outputs", f"run_{_DEFAULT_RUN_TS}")
@@ -700,8 +709,9 @@ def run_one_realisation(idx, run_dir):
         cluster_obs, data_vectors_fit, cov_matrices_fit, RADII_fit,
         priors=PRIORS, delta_m_ref=DELTA_M_REF, fit_beta=True,
         FMISS=FMISS_FIT, SIGMA_OFF=SIGMA_OFF_FIT,
+        coh_amplitude=COH_AMPLITUDE,
         n_live=N_LIVE, pool=N_WORKERS,
-        verbose=True, filepath=checkpoint, resume=True, timeout= TIMEOUT,
+        verbose=True, filepath=checkpoint, resume=True, timeout=TIMEOUT,
     )
     points, log_w, log_l = sampler.posterior()
     weights = np.exp(log_w - log_w.max())

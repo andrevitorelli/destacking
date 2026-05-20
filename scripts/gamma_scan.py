@@ -173,6 +173,13 @@ PRIORS = {
 
 N_LIVE = 400
 
+# Per-cluster coherent-scatter fraction passed to run_sampler_combined.
+# 0.0 (default) reproduces the previous shape-noise-only likelihood;
+# ~0.25 inflates each cluster's covariance by a rank-1 term
+# (coh * m_i)(coh * m_i)^T to absorb the per-cluster coherent amplitude
+# scatter from triaxiality and miscentering realisation.
+COH_AMPLITUDE = float(os.environ.get("COH_AMPLITUDE", 0.0))
+
 # Output directory: timestamped per run so successive scans do not clobber
 # each other.  Override via the RUN_DIR env var to resume a previous run
 # (the script will reload its cached gamma_*.json files from there).
@@ -440,6 +447,7 @@ def run_one_gamma(gamma_true):
         fit_beta=True,
         FMISS=FMISS_FIT,
         SIGMA_OFF=SIGMA_OFF_FIT,
+        coh_amplitude=COH_AMPLITUDE,
         n_live=N_LIVE,
         pool=N_WORKERS,
         verbose=True,

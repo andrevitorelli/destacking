@@ -307,3 +307,92 @@ def test_run_sampler_combined_runs_and_returns_finite(combined_dataset):
     assert points.shape[1] == 5  # c0, alpha, beta, gamma, log_M_norm
     assert np.any(np.isfinite(log_w))
     assert not np.any(np.isnan(log_w))
+
+
+# ---------------------------------------------------------------------------
+# Low-rank covariance inflation via Sherman-Morrison
+# ---------------------------------------------------------------------------
+
+def test_cholog_gaussian_rank1_matches_brute_force():
+    """Sherman-Morrison path must reproduce a direct scipy log-pdf
+    computation that uses the dense inflated covariance C + uu^T."""
+    rng = np.random.default_rng(123)
+    N, k = 3, 8
+    covs = []
+    for _ in range(N):
+        A = rng.standard_normal((k, k))
+        covs.append(A @ A.T + 5.0 * np.eye(k))
+    covs = np.array(covs)
+    residuals = rng.standard_normal((N, k)) * 0.3
+    models = rng.standard_normal((N, k)) * 1.0
+    coh = 0.25
+
+    ll_sm = cholog_gaussian(residuals, covs,
+                            coh_vectors=models, coh_amplitude=coh)
+
+    ll_bf = 0.0
+    for i in range(N):
+        u = coh * models[i]
+        C_eff = covs[i] + np.outer(u, u)
+        ll_bf += multivariate_normal.logpdf(
+            residuals[i], mean=np.zeros(k), cov=C_eff,
+        )
+
+    np.testing.assert_allclose(ll_sm, ll_bf, rtol=1e-10)
+
+
+def test_cholog_gaussian_rank1_zero_amplitude_is_backward_compatible():
+    rng = np.random.default_rng(7)
+    N, k = 4, 6
+    covs = np.tile(np.eye(k), (N, 1, 1)) * 0.5
+    residuals = rng.standard_normal((N, k)) * 0.1
+    models = rng.standard_normal((N, k))
+
+    ll_bare = cholog_gaussian(residuals, covs)
+    ll_zero = cholog_gaussian(residuals, covs,
+                              coh_vectors=models, coh_amplitude=0.0)
+    ll_no_vecs = cholog_gaussian(residuals, covs,
+                                 coh_vectors=None, coh_amplitude=0.5)
+    np.testing.assert_allclose(ll_zero,    ll_bare, rtol=1e-15)
+    np.testing.assert_allclose(ll_no_vecs, ll_bare, rtol=1e-15)
+
+
+def test_cholog_gaussian_rank1_inflation_absorbs_aligned_residual():
+    # With a residual perfectly aligned with the rank-1 direction and
+    # |alpha m| > 1 (so the inflation is large compared to the bare cov),
+    # the quadratic-form reduction (r^T C^-1 r decreases) dominates the
+    # log-det increase, so the inflated log-pdf is higher than the bare one.
+    rng = np.random.default_rng(0)
+    N, k = 5, 8
+    covs = np.tile(np.eye(k), (N, 1, 1))
+    models = rng.standard_normal((N, k)) * 5.0    # large amplitude
+    residuals = models.copy()                      # r = u exactly
+    ll_bare = cholog_gaussian(residuals, covs)
+    ll_inf  = cholog_gaussian(residuals, covs,
+                              coh_vectors=models, coh_amplitude=1.0)
+    assert np.isfinite(ll_inf)
+    assert ll_inf > ll_bare
+
+
+def test_cholog_gaussian_rank1_negative_amplitude_is_rejected():
+    rng = np.random.default_rng(0)
+    N, k = 2, 4
+    covs = np.tile(np.eye(k), (N, 1, 1))
+    residuals = rng.standard_normal((N, k))
+    models = rng.standard_normal((N, k))
+    assert cholog_gaussian(residuals, covs,
+                           coh_vectors=models, coh_amplitude=-0.1) == -np.inf
+
+
+def test_log_likelihood_combined_accepts_coh_amplitude(combined_dataset):
+    """End-to-end: log_likelihood_combined accepts and applies coh_amplitude."""
+    cluster_obs, data, cov = combined_dataset
+    ll0   = log_likelihood_combined(5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+                                    coh_amplitude=0.0)
+    ll025 = log_likelihood_combined(5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+                                    coh_amplitude=0.25)
+    assert np.isfinite(ll0) and np.isfinite(ll025)
+    # The two values must differ because the rank-1 inflation enters the
+    # likelihood (we don't make any assumption about the sign of ll025-ll0,
+    # which depends on the alignment of the residuals with the model).
+    assert ll025 != ll0
