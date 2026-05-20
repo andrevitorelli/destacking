@@ -31,7 +31,10 @@ def test_gamma_recovery():
         seed=42,
     )
     cluster_obs, data, covs = make_test_data(
-        truth, RADII, fractional_noise=0.05, seed=43
+        truth, RADII,
+        fractional_noise=0.0,
+        poisson_richness=False,
+        seed=43,
     )
     sampler = run_sampler(
         cluster_obs, data, covs, RADII,

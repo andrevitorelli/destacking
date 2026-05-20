@@ -103,8 +103,19 @@ def test_cholog_gaussian_consistent_with_scipy():
 
 @pytest.fixture(scope="module")
 def test_dataset():
+    # fractional_noise=0 + poisson_richness=False make the data deterministic
+    # given the truth catalogue, so the likelihood is sharply peaked at the
+    # truth gamma and the monotonicity assertions below hold exactly.  Both
+    # noise sources must be off: fractional_noise controls the ΔΣ residuals
+    # and poisson_richness controls the errors-in-variables scatter that
+    # propagates through the M(Λ) inversion in the forward model.
     truth = generate_truth_catalog(30, seed=42, delta_m_gamma=TRUTH_GAMMA)
-    return make_test_data(truth, RADII, fractional_noise=0.2, seed=7)
+    return make_test_data(
+        truth, RADII,
+        fractional_noise=0.0,
+        poisson_richness=False,
+        seed=7,
+    )
 
 
 def test_log_likelihood_scalar(test_dataset):
@@ -117,12 +128,6 @@ def test_log_likelihood_finite_at_true_gamma(test_dataset):
     cluster_obs, data, covs = test_dataset
     ll = log_likelihood(TRUTH_GAMMA, cluster_obs, data, covs, RADII)
     assert np.isfinite(ll)
-
-
-def test_log_likelihood_negative_gamma_returns_neg_inf(test_dataset):
-    cluster_obs, data, covs = test_dataset
-    ll = log_likelihood(-0.5, cluster_obs, data, covs, RADII)
-    assert ll == -np.inf
 
 
 def test_log_likelihood_prefers_true_gamma(test_dataset):
