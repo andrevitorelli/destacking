@@ -423,7 +423,13 @@ def run_one_gamma(gamma_true):
     FMISS_FIT = np.full(N_CLUSTERS, 1.0 - F_CEN)
     SIGMA_OFF_FIT = np.full(N_CLUSTERS, SIGMA_OFF_MPC)
 
-    print("  Running sampler...", flush=True)
+    # Nautilus checkpoint file -- one per gamma so a crashed sampler can
+    # resume from where it stopped instead of restarting from scratch.
+    checkpoint = os.path.join(OUTDIR, f"checkpoint_{gamma_true:+.3f}.hdf5")
+    print(
+        f"  Running sampler (verbose, checkpoint: {os.path.basename(checkpoint)})...",
+        flush=True,
+    )
     sampler = run_sampler_combined(
         cluster_obs,
         data_vectors_fit,
@@ -436,7 +442,9 @@ def run_one_gamma(gamma_true):
         SIGMA_OFF=SIGMA_OFF_FIT,
         n_live=N_LIVE,
         pool=N_WORKERS,
-        verbose=False,
+        verbose=True,
+        filepath=checkpoint,
+        resume=True,
     )
 
     points, log_w, log_l = sampler.posterior()

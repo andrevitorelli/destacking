@@ -358,6 +358,8 @@ def run_sampler_combined(
     n_live=400,
     pool=None,
     verbose=True,
+    filepath=None,
+    resume=True,
 ):
     """
     Run the nautilus nested sampler for the combined M–c + magnitude-gap model.
@@ -426,6 +428,15 @@ def run_sampler_combined(
     n_live : int
     pool : int or None
     verbose : bool
+    filepath : str or None
+        Optional HDF5 path passed straight to ``nautilus.Sampler`` for
+        periodic checkpointing.  When set, the sampler dumps its state to
+        this file as it makes progress; if the file already exists and
+        ``resume=True``, the sampler resumes from that state rather than
+        starting over.
+    resume : bool
+        If ``True`` (default) and ``filepath`` exists, resume from the saved
+        state.  Has no effect when ``filepath`` is ``None``.
 
     Returns
     -------
@@ -477,6 +488,10 @@ def run_sampler_combined(
             BCG_B_MASS=BCG_B_MASS,
         )
 
-    sampler = Sampler(nprior, _loglike, n_live=n_live, pool=pool)
+    sampler = Sampler(
+        nprior, _loglike,
+        n_live=n_live, pool=pool,
+        filepath=filepath, resume=resume,
+    )
     sampler.run(verbose=verbose)
     return sampler

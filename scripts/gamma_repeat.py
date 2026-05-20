@@ -159,7 +159,7 @@ PRIORS = {
     "c0":         sp_norm(loc=4.57, scale=0.05),
     "alpha":      sp_norm(loc=-0.1, scale=0.05),
     "beta":       sp_norm(loc=-0.4, scale=0.2),
-    "gamma":      sp_norm(loc=0.0,  scale=1.0),
+    "gamma":      sp_norm(loc=0.0,  scale=5.0),
     "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
 }
 PRIOR_LABELS = {
@@ -614,7 +614,7 @@ def plot_mc_recovery_band(points, weights, truth, ols, outdir):
                     vmin=0, vmax=4, rasterized=True, zorder=0)
     plt.colorbar(sc, ax=ax, label=r"$\Delta m$ [mag]")
     ax.set(xlabel=r"$\log_{10}(M_{\rm halo})$", ylabel=r"$c_{200}$")
-    ax.set_title("Combined M-c + γ recovery band  (radial cut $R \\ge 0.5$ Mpc)",
+    ax.set_title("Combined M-c + γ recovery band  (radial cut $R \\geq 0.5$ Mpc)",
                  fontsize=11)
     ax.legend(fontsize=8, ncol=2)
     plt.tight_layout()
@@ -688,12 +688,19 @@ def run_one_realisation(idx, run_dir):
     FMISS_FIT = np.full(N_CLUSTERS, 1.0 - F_CEN)
     SIGMA_OFF_FIT = np.full(N_CLUSTERS, SIGMA_OFF_MPC)
 
-    print("  running sampler ...", flush=True)
+    # Nautilus checkpoint -- one HDF5 per realisation in the realisation
+    # subdir, so a crashed sampler can resume from where it stopped.
+    checkpoint = os.path.join(subdir, "nautilus_checkpoint.hdf5")
+    print(
+        f"  running sampler (verbose, checkpoint: {os.path.basename(checkpoint)})...",
+        flush=True,
+    )
     sampler = run_sampler_combined(
         cluster_obs, data_vectors_fit, cov_matrices_fit, RADII_fit,
         priors=PRIORS, delta_m_ref=DELTA_M_REF, fit_beta=True,
         FMISS=FMISS_FIT, SIGMA_OFF=SIGMA_OFF_FIT,
-        n_live=N_LIVE, pool=N_WORKERS, verbose=False,
+        n_live=N_LIVE, pool=N_WORKERS,
+        verbose=True, filepath=checkpoint, resume=True,
     )
     points, log_w, log_l = sampler.posterior()
     weights = np.exp(log_w - log_w.max())
