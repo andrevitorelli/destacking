@@ -53,6 +53,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shutil
 import sys
 import time
 import traceback
@@ -159,7 +160,7 @@ PRIORS = {
     "c0":         sp_norm(loc=4.57, scale=0.05),
     "alpha":      sp_norm(loc=-0.1, scale=0.05),
     "beta":       sp_norm(loc=-0.4, scale=0.2),
-    "gamma":      sp_norm(loc=0.0,  scale=1.),
+    "gamma":      sp_norm(loc=0.0,  scale=1.5),
     "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
 }
 PRIOR_LABELS = {
@@ -743,7 +744,10 @@ def run_one_realisation(idx, run_dir):
 
 # ── Aggregate plots ─────────────────────────────────────────────────────────
 def plot_gamma_residuals(results, run_dir):
-    idx = np.array([r["realisation"] for r in results])
+    # Use a sequential index 1..len(results) for the x-axis: when failed
+    # realisations have been deleted, the underlying realisation directory
+    # numbers may have gaps that would otherwise leave holes in the plot.
+    seq_idx = np.arange(1, len(results) + 1)
     gm  = np.array([r["gamma_med"]   for r in results])
     glo = np.array([r["gamma_lo"]    for r in results])
     ghi = np.array([r["gamma_hi"]    for r in results])
@@ -756,7 +760,7 @@ def plot_gamma_residuals(results, run_dir):
     mean_sigma  = np.mean((ghi - glo) / 2.0)
 
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.errorbar(idx, residuals, yerr=yerr, fmt="o",
+    ax.errorbar(seq_idx, residuals, yerr=yerr, fmt="o",
                 color="steelblue", capsize=4, markersize=6,
                 label=r"Posterior median $\pm$68% CI")
     ax.axhline(0.0, color="k", lw=1, ls="--", label="Unbiased")
@@ -764,10 +768,10 @@ def plot_gamma_residuals(results, run_dir):
                label=rf"$\sigma_{{\rm runs}} = {std_res:.4f}$")
     ax.axhline(mean_res, color="tomato", lw=1.5, ls=":",
                label=rf"Mean residual = {mean_res:+.4f}")
-    ax.set(xlabel="Realisation index",
+    ax.set(xlabel="Successful realisation #",
            ylabel=r"$\hat\gamma - \gamma_{\rm true}$",
-           title=(rf"$\gamma$ residuals across {len(results)} realisations  "
-                  rf"($\gamma_{{\rm true}}={TRUE_GAMMA}$, "
+           title=(rf"$\gamma$ residuals across {len(results)} successful "
+                  rf"realisations  ($\gamma_{{\rm true}}={TRUE_GAMMA}$, "
                   rf"$N={N_CLUSTERS}$, MASTER_SEED = None)"))
     ax.legend(fontsize=9, loc="best")
     ax.grid(alpha=0.3)
@@ -872,53 +876,109 @@ def main():
     # The DES Y3 n(z) plot only needs to be drawn once.
     plot_des_y3_nz(RUN_DIR)
 
-    results = []
-    durations = []                         # freshly-computed iteration times only
+    # We iterate over realisation directory indices (`attempt_idx`) and keep
+    # going until we have collected N_REALISATIONS *successful* realisations.
+    # A realisation is considered failed if run_one_realisation raises; in
+    # that case its directory is removed so the next invocation will not
+    # mistake the partial state for a cache hit, and the failed attempt does
+    # not count against the target.  Wall-time of failed attempts is still
+    # included in the running ETA so the estimate reflects the real cost of
+    # reaching the target.
+    results = []                           # successful results only
+    durations = []                         # wall time per attempt (fresh, incl. failed)
+    failures = []                          # list of (attempt_idx, error_class_name)
     total = N_REALISATIONS
+    max_attempts = 4 * total               # safety cap to avoid an infinite loop
+    attempt_idx = 0
     run_t0 = time.time()
-    for k in range(total):
-        subdir = os.path.join(RUN_DIR, f"realisation_{k:03d}")
+
+    while len(results) < total and attempt_idx < max_attempts:
+        subdir = os.path.join(RUN_DIR, f"realisation_{attempt_idx:03d}")
         summary_path = os.path.join(subdir, "summary.json")
         npz_path     = os.path.join(subdir, "gamma_posterior.npz")
         if os.path.exists(summary_path) and os.path.exists(npz_path):
             print(
-                f"\n[{k + 1}/{total}] realisation_{k:03d} -- cached, loading",
+                f"\n[{len(results) + 1}/{total}] realisation_{attempt_idx:03d} "
+                f"-- cached, loading",
                 flush=True,
             )
             with open(summary_path) as f:
                 results.append(json.load(f))
+            attempt_idx += 1
             continue
 
-        print(f"\n[{k + 1}/{total}] realisation_{k:03d}", flush=True)
+        print(
+            f"\n[{len(results) + 1}/{total}] realisation_{attempt_idx:03d}  "
+            f"(attempt {attempt_idx + 1})",
+            flush=True,
+        )
         iter_t0 = time.time()
         try:
-            r = run_one_realisation(k, RUN_DIR)
+            r = run_one_realisation(attempt_idx, RUN_DIR)
+        except KeyboardInterrupt:
+            raise
         except Exception as exc:
-            print(f"  FAILED for realisation {k}:", flush=True)
+            iter_dt = time.time() - iter_t0
+            print(
+                f"  FAILED in {_fmt_duration(iter_dt)} -- removing "
+                f"{os.path.relpath(subdir, RUN_DIR)}/",
+                flush=True,
+            )
             traceback.print_exc()
+            shutil.rmtree(subdir, ignore_errors=True)
+            durations.append(iter_dt)
+            failures.append((attempt_idx, type(exc).__name__))
+            attempt_idx += 1
             continue
+
         iter_dt = time.time() - iter_t0
         durations.append(iter_dt)
         results.append(r)
 
-        remaining = total - (k + 1)
+        # ETA accounts for the empirical failure rate so far: to reach the
+        # target we expect remaining_successful / (1 - failure_rate) more
+        # attempts on average.
+        remaining_success = total - len(results)
         avg = sum(durations) / len(durations)
-        eta = avg * remaining
+        total_attempts_so_far = len(results) + len(failures)
+        fail_rate = (
+            len(failures) / total_attempts_so_far if total_attempts_so_far else 0.0
+        )
+        success_rate = max(1.0 - fail_rate, 1e-3)   # avoid div-by-zero pathology
+        expected_remaining_attempts = remaining_success / success_rate
+        eta = avg * expected_remaining_attempts
+
+        msg = (
+            f"  [{len(results)}/{total}] iteration took {_fmt_duration(iter_dt)}; "
+            f"avg {_fmt_duration(avg)}; ETA {_fmt_duration(eta)} for "
+            f"{remaining_success} more successful realisation"
+            f"{'s' if remaining_success != 1 else ''}"
+        )
+        if failures:
+            msg += (
+                f"  ({len(failures)} failed, "
+                f"fail rate {100 * fail_rate:.0f}%)"
+            )
+        print(msg, flush=True)
+        attempt_idx += 1
+
+    if attempt_idx >= max_attempts and len(results) < total:
         print(
-            f"  [{k + 1}/{total}] iteration took {_fmt_duration(iter_dt)}; "
-            f"avg {_fmt_duration(avg)}; "
-            f"ETA {_fmt_duration(eta)} for {remaining} remaining iteration"
-            f"{'s' if remaining != 1 else ''}",
-            flush=True,
+            f"\nGiving up: reached {max_attempts} attempts but only "
+            f"{len(results)} of {total} realisations succeeded.",
+            file=sys.stderr,
         )
 
     total_elapsed = time.time() - run_t0
     print(
         f"\nTotal wall time: {_fmt_duration(total_elapsed)}  "
-        f"({len(durations)} fresh realisation"
-        f"{'s' if len(durations) != 1 else ''} timed)",
+        f"({len(results)} successful realisation"
+        f"{'s' if len(results) != 1 else ''}, "
+        f"{len(failures)} failed, {attempt_idx} attempts)",
         flush=True,
     )
+    if failures:
+        print(f"Failed attempts: {failures}", flush=True)
 
     if not results:
         print("No successful realisations; nothing to aggregate.", file=sys.stderr)
