@@ -8,27 +8,9 @@ from destacking.model import (
 from scipy.stats import truncnorm as sp_truncnorm, norm as sp_norm, uniform as sp_uniform
 
 
-def cholog_gaussian(data_vectors, cov_matrices,
-                    coh_vectors=None, coh_amplitude=0.0):
+def cholog_gaussian(data_vectors, cov_matrices):
     """
-    Simultaneous Gaussian log-likelihood for N data vectors of size k,
-    with optional per-cluster rank-1 covariance inflation.
-
-    The per-cluster effective covariance is
-        C_eff_i = C_i + u_i u_i^T,    u_i = coh_amplitude * coh_vectors[i]
-    which encodes a fully coherent per-cluster amplitude scatter at the
-    fractional level ``coh_amplitude`` when ``coh_vectors`` is the
-    per-cluster model profile.  This captures the missing variance from
-    triaxiality and miscentering that is correlated across radial bins of
-    the same cluster but uncorrelated cluster-to-cluster.  The Cholesky
-    factor of C_i is reused via Sherman–Morrison so we never form the
-    dense inflated covariance:
-
-        log|C_eff|     = log|C| + log(1 + u^T C^-1 u)
-        r^T C_eff^-1 r = r^T C^-1 r - (r^T C^-1 u)^2 / (1 + u^T C^-1 u)
-
-    With ``coh_amplitude == 0`` (default) the function reduces to the bare
-    shape-noise likelihood.
+    Simultaneous Gaussian log-likelihood for N data vectors of size k.
 
     Returns ``-np.inf`` if any cluster yields a non-finite contribution.
     The nautilus sampler is happy with ``-np.inf`` but treats NaN as a
@@ -39,51 +21,20 @@ def cholog_gaussian(data_vectors, cov_matrices,
     data_vectors : ndarray (N, k)
         Per-cluster residual vectors (data minus model).
     cov_matrices : ndarray (N, k, k)
-        Per-cluster covariance matrices (shape-noise only).
-    coh_vectors : ndarray (N, k) or None
-        Per-cluster rank-1 direction; typically the forward-model profile
-        ``m_i`` itself so that the inflation is a fractional amplitude
-        scatter.  Required when ``coh_amplitude > 0``; ignored otherwise.
-    coh_amplitude : float
-        Fractional coherent scatter (e.g. 0.25 for 25% per-cluster
-        amplitude jitter).  Must be >= 0.  Default 0 -> no inflation.
+        Per-cluster covariance matrices.
     """
-    if coh_amplitude < 0:
-        return -np.inf
-    use_rank1 = (coh_vectors is not None) and (coh_amplitude > 0.0)
-
     n, k = data_vectors.shape
     total_log_lik = 0.0
     log_2pi = np.log(2 * np.pi)
 
     for i in range(n):
-        # If the residual itself is non-finite there is no information in
-        # this cluster; bail out immediately rather than propagating NaN
-        # through the linear solve.
         if not np.all(np.isfinite(data_vectors[i])):
-            return -np.inf
-        if use_rank1 and not np.all(np.isfinite(coh_vectors[i])):
             return -np.inf
         try:
             L = np.linalg.cholesky(cov_matrices[i])
-            # Solve L * y = r  -> y = L^-1 r,  r^T C^-1 r = y^T y
             y = np.linalg.solve(L, data_vectors[i])
             quad_form = float(np.dot(y, y))
             log_det = 2.0 * float(np.sum(np.log(np.diag(L))))
-
-            if use_rank1:
-                u = coh_amplitude * coh_vectors[i]
-                # Solve L * w = u  -> w = L^-1 u,  u^T C^-1 u = w^T w
-                w = np.linalg.solve(L, u)
-                uCu = float(np.dot(w, w))
-                denom = 1.0 + uCu
-                # Sherman–Morrison update of the quadratic form:
-                #   r^T C_eff^-1 r = quad_form - (y^T w)^2 / denom
-                cross = float(np.dot(y, w))
-                quad_form = quad_form - cross * cross / denom
-                # ... and of the log-determinant: + log(1 + uCu)
-                log_det = log_det + np.log(denom)
-
             log_lik = -0.5 * (k * log_2pi + log_det + quad_form)
         except (np.linalg.LinAlgError, ValueError, FloatingPointError):
             return -np.inf
@@ -109,15 +60,11 @@ def log_likelihood(
     c_pivot_0=1.0,
     delta_m_ref=1.0,
     log_M_norm=0.0,
-    coh_amplitude=0.0,
 ):
     """
     Log-likelihood for gamma given cluster observables and ΔΣ data.
 
-    Evaluates cholog_gaussian on (data − model) residuals.  When
-    ``coh_amplitude > 0`` the per-cluster covariance is inflated by a
-    rank-1 term ``(coh_amplitude * m_i)(coh_amplitude * m_i)^T`` to absorb
-    coherent per-cluster amplitude scatter from triaxiality/miscentering.
+    Evaluates cholog_gaussian on (data − model) residuals.
 
     Returns -inf for unphysical parameter values, for forward-model values
     that contain NaN/inf, or if the forward model raises an exception.
@@ -127,10 +74,7 @@ def log_likelihood(
         if not np.all(np.isfinite(model)):
             return -np.inf
         residuals = data_vectors - model
-        ll = cholog_gaussian(
-            residuals, cov_matrices,
-            coh_vectors=model, coh_amplitude=coh_amplitude,
-        )
+        ll = cholog_gaussian(residuals, cov_matrices)
         return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
@@ -234,14 +178,9 @@ def log_likelihood_mc(
     M_pivot_log=_MC_M_PIVOT_LOG,
     z_ref=_MC_Z_REF,
     log_M_norm=0.0,
-    coh_amplitude=0.0,
 ):
     """
     Log-likelihood for the M–c relation parameters given ΔΣ data.
-
-    When ``coh_amplitude > 0`` the per-cluster covariance is inflated by a
-    rank-1 term ``(coh_amplitude * m_i)(coh_amplitude * m_i)^T`` to
-    absorb coherent per-cluster amplitude scatter.
 
     Returns -inf for unphysical c0, for NaN/inf in the forward model, or
     if the forward model raises.
@@ -255,10 +194,7 @@ def log_likelihood_mc(
         if not np.all(np.isfinite(model)):
             return -np.inf
         residuals = data_vectors - model
-        ll = cholog_gaussian(
-            residuals, cov_matrices,
-            coh_vectors=model, coh_amplitude=coh_amplitude,
-        )
+        ll = cholog_gaussian(residuals, cov_matrices)
         return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
@@ -385,7 +321,6 @@ def log_likelihood_combined(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
-    coh_amplitude=0.0,
 ):
     """
     Log-likelihood for the combined M–c + magnitude-gap model.
@@ -393,15 +328,6 @@ def log_likelihood_combined(
     FMISS, SIGMA_OFF, BCG_B_MASS are passed through to forward_model_combined
     as fixed per-cluster miscentering / BCG arrays.  Default None means
     centered NFW with no BCG.
-
-    ``coh_amplitude`` enables a rank-1 covariance inflation that captures
-    the coherent per-cluster amplitude scatter from triaxiality and
-    miscentering realisation.  The effective covariance for cluster i is
-    ``C_i + (coh_amplitude * m_i)(coh_amplitude * m_i)^T`` where m_i is
-    the current forward-model profile, so the inflation is a fractional
-    amplitude jitter that scales with the predicted ΔΣ.  Set to ~0.25
-    for a 25% per-cluster coherent scatter; 0 (default) means no
-    inflation.
 
     Returns -inf for unphysical c0, for NaN/inf in the forward model, or
     if the forward model raises.  Never returns NaN: nautilus would
@@ -419,10 +345,7 @@ def log_likelihood_combined(
         if not np.all(np.isfinite(model)):
             return -np.inf
         residuals = data_vectors - model
-        ll = cholog_gaussian(
-            residuals, cov_matrices,
-            coh_vectors=model, coh_amplitude=coh_amplitude,
-        )
+        ll = cholog_gaussian(residuals, cov_matrices)
         return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
@@ -453,7 +376,6 @@ def run_sampler_combined(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
-    coh_amplitude=0.0,
     n_live=400,
     pool=None,
     verbose=True,
@@ -588,7 +510,6 @@ def run_sampler_combined(
             FMISS=FMISS,
             SIGMA_OFF=SIGMA_OFF,
             BCG_B_MASS=BCG_B_MASS,
-            coh_amplitude=coh_amplitude,
         )
 
     sampler = Sampler(
@@ -597,4 +518,197 @@ def run_sampler_combined(
         filepath=filepath, resume=resume,
     )
     sampler.run(verbose=verbose,timeout=timeout)
+    return sampler
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap-resampled combined likelihood and sampler
+# ---------------------------------------------------------------------------
+
+def log_likelihood_combined_resampled(
+    c0,
+    alpha,
+    gamma,
+    cluster_table,
+    data_vectors,
+    cov_matrices,
+    radii,
+    n_resample,
+    replace=True,
+    beta=0.0,
+    M_pivot_log=_MC_M_PIVOT_LOG,
+    z_ref=_MC_Z_REF,
+    delta_m_ref=_MC_DM_REF,
+    log_M_norm=0.0,
+    FMISS=None,
+    SIGMA_OFF=None,
+    BCG_B_MASS=None,
+    rng=None,
+):
+    """
+    Resampled variant of log_likelihood_combined.
+
+    On each call draws a fresh random subset of ``n_resample`` clusters
+    (with or without replacement) and evaluates the combined likelihood on
+    that subset only.  All per-cluster arrays — cluster_table, data_vectors,
+    cov_matrices, FMISS, SIGMA_OFF, BCG_B_MASS — are subsampled with the
+    same index set so they remain consistent.
+
+    This implements a bootstrap-over-clusters approach: the stochasticity
+    introduced on each likelihood call causes the posterior to broaden,
+    reflecting uncertainty from cluster sample variance rather than shape
+    noise alone.
+
+    Parameters
+    ----------
+    n_resample : int
+        Number of clusters to draw on each call.  Set to the full sample
+        size N for a standard bootstrap (draw N with replacement).
+    replace : bool
+        If True (default), sample with replacement (bootstrap).
+        If False, draw a random subsample without replacement.
+    rng : np.random.Generator or None
+        Optional RNG instance.  If None, a fresh generator seeded from OS
+        entropy is created on each call — the intended behaviour inside a
+        sampler where each evaluation must be independently random.
+
+    All other parameters are identical to ``log_likelihood_combined``.
+    """
+    N = len(data_vectors)
+    if rng is None:
+        rng = np.random.default_rng()
+    idx = rng.choice(N, size=n_resample, replace=replace)
+
+    sub_table  = cluster_table[idx]
+    sub_dv     = data_vectors[idx]
+    sub_cov    = cov_matrices[idx]
+    sub_fmiss  = FMISS[idx]      if FMISS      is not None else None
+    sub_sigoff = SIGMA_OFF[idx]  if SIGMA_OFF  is not None else None
+    sub_bcg    = BCG_B_MASS[idx] if BCG_B_MASS is not None else None
+
+    return log_likelihood_combined(
+        c0, alpha, gamma,
+        sub_table, sub_dv, sub_cov, radii,
+        beta=beta,
+        M_pivot_log=M_pivot_log,
+        z_ref=z_ref,
+        delta_m_ref=delta_m_ref,
+        log_M_norm=log_M_norm,
+        FMISS=sub_fmiss,
+        SIGMA_OFF=sub_sigoff,
+        BCG_B_MASS=sub_bcg,
+    )
+
+
+def run_sampler_combined_resampled(
+    cluster_table,
+    data_vectors,
+    cov_matrices,
+    radii,
+    n_resample=None,
+    replace=True,
+    priors=None,
+    # Legacy individual kwargs — used only when priors is None
+    c0_prior_loc=5.0,
+    c0_prior_scale=5.0,
+    alpha_prior_loc=0.0,
+    alpha_prior_scale=0.5,
+    beta_prior_loc=0.0,
+    beta_prior_scale=1.0,
+    gamma_range=(-1.0, 1.0),
+    gamma_prior_sigma=0.5,
+    log_M_norm_sigma=0.1,
+    # Model hyperparameters
+    M_pivot_log=_MC_M_PIVOT_LOG,
+    z_ref=_MC_Z_REF,
+    delta_m_ref=_MC_DM_REF,
+    fit_beta=True,
+    # Fixed per-cluster miscentering / BCG arrays (not sampled)
+    FMISS=None,
+    SIGMA_OFF=None,
+    BCG_B_MASS=None,
+    n_live=400,
+    pool=None,
+    verbose=True,
+    filepath=None,
+    resume=True,
+    timeout=600,
+):
+    """
+    Run the nautilus sampler with a bootstrap-resampled cluster likelihood.
+
+    Identical to ``run_sampler_combined`` except that on every likelihood
+    evaluation a fresh random draw of ``n_resample`` clusters is used,
+    implementing an in-sampler bootstrap over the cluster sample.  The
+    posterior therefore marginalises over cluster sample variance in
+    addition to the usual shape-noise uncertainty.
+
+    Parameters
+    ----------
+    n_resample : int or None
+        Number of clusters drawn on each likelihood call.  Defaults to the
+        full sample size N (standard bootstrap with replacement).
+    replace : bool
+        If True (default), sample with replacement (bootstrap).
+        If False, draw without replacement (subsampling).
+
+    All other parameters are identical to ``run_sampler_combined``.
+    """
+    from nautilus import Prior, Sampler
+
+    N = len(data_vectors)
+    if n_resample is None:
+        n_resample = N
+
+    if priors is None:
+        lo, hi = gamma_range
+        a = (lo - 0.0) / gamma_prior_sigma
+        b = (hi - 0.0) / gamma_prior_sigma
+        priors = {
+            'c0':         sp_norm(loc=c0_prior_loc,    scale=c0_prior_scale),
+            'alpha':      sp_norm(loc=alpha_prior_loc, scale=alpha_prior_scale),
+            'beta':       sp_norm(loc=beta_prior_loc,  scale=beta_prior_scale),
+            'gamma':      sp_truncnorm(a=a, b=b, loc=0.0, scale=gamma_prior_sigma),
+            'log_M_norm': sp_norm(loc=0.0, scale=log_M_norm_sigma),
+        }
+
+    required = {'c0', 'alpha', 'gamma', 'log_M_norm'}
+    if fit_beta:
+        required.add('beta')
+    missing = required - set(priors)
+    if missing:
+        raise KeyError(
+            f"priors dict is missing required keys: {sorted(missing)}"
+        )
+
+    nprior = Prior()
+    nprior.add_parameter('c0',    dist=priors['c0'])
+    nprior.add_parameter('alpha', dist=priors['alpha'])
+    if fit_beta:
+        nprior.add_parameter('beta', dist=priors['beta'])
+    nprior.add_parameter('gamma',      dist=priors['gamma'])
+    nprior.add_parameter('log_M_norm', dist=priors['log_M_norm'])
+
+    def _loglike(p):
+        return log_likelihood_combined_resampled(
+            p['c0'], p['alpha'], p['gamma'],
+            cluster_table, data_vectors, cov_matrices, radii,
+            n_resample=n_resample,
+            replace=replace,
+            beta=p.get('beta', 0.0),
+            M_pivot_log=M_pivot_log,
+            z_ref=z_ref,
+            delta_m_ref=delta_m_ref,
+            log_M_norm=p['log_M_norm'],
+            FMISS=FMISS,
+            SIGMA_OFF=SIGMA_OFF,
+            BCG_B_MASS=BCG_B_MASS,
+        )
+
+    sampler = Sampler(
+        nprior, _loglike,
+        n_live=n_live, pool=pool,
+        filepath=filepath, resume=resume,
+    )
+    sampler.run(verbose=verbose, timeout=timeout)
     return sampler
