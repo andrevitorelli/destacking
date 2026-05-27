@@ -200,12 +200,14 @@ def forward_model_combined(
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
     log_M_norm=0.0,
+    A=1.0,
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
 ):
     """
-    Predict NFW ΔΣ profiles using a combined M–c + magnitude-gap model.
+    Predict NFW ΔΣ profiles using a combined M–c + magnitude-gap model
+    with an optional global amplitude correction.
 
     The full parametric concentration is:
 
@@ -217,9 +219,15 @@ def forward_model_combined(
     gamma is d(log10 c) / d(log10(Δm/Δm_ref)).  Clusters without detected
     satellites (delta_m = NaN) receive no gamma correction (log10 ratio = 0).
 
-    The signal returned is the one-halo mixture
-    ``(1 − FMISS)·NFW_centered + FMISS·NFW_miscentered + BCG`` from
-    ``xlensing.model.NFW_Delta_Sigma`` with the 2-halo term subtracted.
+    The signal returned is
+
+        A · [(1 − FMISS)·NFW_centered + FMISS·NFW_miscentered + BCG]
+
+    from ``xlensing.model.NFW_Delta_Sigma`` (with the 2-halo term subtracted)
+    and a global multiplicative amplitude factor ``A``.  A is intended to
+    absorb the population-mean orientation/triaxiality bias measured from
+    simulations (the spherical-vs-triaxial deficit), and would typically be
+    given a tight Gaussian prior centred on the simulation-calibrated value.
 
     Parameters
     ----------
@@ -243,6 +251,9 @@ def forward_model_combined(
         Reference magnitude gap [mag].  Default 1.0.
     log_M_norm : float
         Log10 mass normalisation offset [dex].  Default 0.
+    A : float
+        Global multiplicative amplitude correction.  Default 1.0 (no
+        correction) reproduces the previous forward model.
     FMISS, SIGMA_OFF, BCG_B_MASS : array_like (N,) or None
         Optional per-cluster miscentering and BCG arrays passed through to
         ``_nfw_profiles``.  Default ``None`` → centered, no BCG.
@@ -269,5 +280,7 @@ def forward_model_combined(
             + gamma * log_dm_r)
     C200m = 10.0 ** logC
 
-    return _nfw_profiles(z, M200m, C200m, radii,
-                        FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS)
+    return A * _nfw_profiles(
+        z, M200m, C200m, radii,
+        FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
+    )

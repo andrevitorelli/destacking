@@ -318,6 +318,7 @@ def log_likelihood_combined(
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
     log_M_norm=0.0,
+    A=1.0,
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
@@ -327,19 +328,19 @@ def log_likelihood_combined(
 
     FMISS, SIGMA_OFF, BCG_B_MASS are passed through to forward_model_combined
     as fixed per-cluster miscentering / BCG arrays.  Default None means
-    centered NFW with no BCG.
+    centered NFW with no BCG.  ``A`` is a global multiplicative amplitude
+    correction (default 1.0).
 
-    Returns -inf for unphysical c0, for NaN/inf in the forward model, or
-    if the forward model raises.  Never returns NaN: nautilus would
-    otherwise report ``f_live = nan`` and silently produce a bad chain.
+    Returns -inf for unphysical c0 or A, for NaN/inf in the forward model,
+    or if the forward model raises.  Never returns NaN.
     """
-    if c0 <= 0:
+    if c0 <= 0 or A <= 0:
         return -np.inf
     try:
         model     = forward_model_combined(
             c0, alpha, gamma, cluster_table, radii,
             beta=beta, M_pivot_log=M_pivot_log, z_ref=z_ref,
-            delta_m_ref=delta_m_ref, log_M_norm=log_M_norm,
+            delta_m_ref=delta_m_ref, log_M_norm=log_M_norm, A=A,
             FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
         )
         if not np.all(np.isfinite(model)):
@@ -407,6 +408,10 @@ def run_sampler_combined(
         ``nautilus.Prior.add_parameter``).
         Required keys: ``'c0'``, ``'alpha'``, ``'gamma'``, ``'log_M_norm'``.
         Required additionally when ``fit_beta=True``: ``'beta'``.
+        Optional: ``'A'`` --- global multiplicative amplitude correction.
+        If supplied, A is sampled and appended at the END of the parameter
+        order (after log_M_norm), preserving the indexing of every earlier
+        parameter.  If absent, A is fixed at 1.0.
         Example::
 
             from scipy.stats import norm, truncnorm
@@ -416,6 +421,7 @@ def run_sampler_combined(
                 'beta':       norm(loc=0.0, scale=1.0),
                 'gamma':      truncnorm(a=-2, b=2, loc=0.0, scale=0.5),
                 'log_M_norm': norm(loc=0.0, scale=0.1),
+                'A':          norm(loc=0.80, scale=0.02),   # optional
             }
         Default ``None`` — fall back to the individual legacy kwargs below.
     c0_prior_loc, c0_prior_scale : float
@@ -436,9 +442,10 @@ def run_sampler_combined(
         Reference magnitude gap [mag].  Default 1.0.
     fit_beta : bool
         If True, include beta as a free parameter.
-        Parameter order: c0, alpha, beta, gamma, log_M_norm.
+        Parameter order: c0, alpha, beta, gamma, log_M_norm, [A].
         If False, fix beta = 0.
-        Parameter order: c0, alpha, gamma, log_M_norm.
+        Parameter order: c0, alpha, gamma, log_M_norm, [A].
+        A is appended only when ``priors`` contains an ``'A'`` key.
     FMISS : array_like (N,) or None
         Per-cluster miscentered-signal fraction.  Held fixed (not sampled).
         Default None → zeros (centered NFW).
@@ -497,6 +504,9 @@ def run_sampler_combined(
         nprior.add_parameter('beta', dist=priors['beta'])
     nprior.add_parameter('gamma',      dist=priors['gamma'])
     nprior.add_parameter('log_M_norm', dist=priors['log_M_norm'])
+    sample_A = 'A' in priors
+    if sample_A:
+        nprior.add_parameter('A', dist=priors['A'])
 
     def _loglike(p):
         return log_likelihood_combined(
@@ -507,6 +517,7 @@ def run_sampler_combined(
             z_ref=z_ref,
             delta_m_ref=delta_m_ref,
             log_M_norm=p['log_M_norm'],
+            A=p.get('A', 1.0),
             FMISS=FMISS,
             SIGMA_OFF=SIGMA_OFF,
             BCG_B_MASS=BCG_B_MASS,
@@ -540,6 +551,7 @@ def log_likelihood_combined_resampled(
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
     log_M_norm=0.0,
+    A=1.0,
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
@@ -594,6 +606,7 @@ def log_likelihood_combined_resampled(
         z_ref=z_ref,
         delta_m_ref=delta_m_ref,
         log_M_norm=log_M_norm,
+        A=A,
         FMISS=sub_fmiss,
         SIGMA_OFF=sub_sigoff,
         BCG_B_MASS=sub_bcg,
@@ -688,6 +701,8 @@ def run_sampler_combined_resampled(
         nprior.add_parameter('beta', dist=priors['beta'])
     nprior.add_parameter('gamma',      dist=priors['gamma'])
     nprior.add_parameter('log_M_norm', dist=priors['log_M_norm'])
+    if 'A' in priors:
+        nprior.add_parameter('A', dist=priors['A'])
 
     def _loglike(p):
         return log_likelihood_combined_resampled(
@@ -700,6 +715,7 @@ def run_sampler_combined_resampled(
             z_ref=z_ref,
             delta_m_ref=delta_m_ref,
             log_M_norm=p['log_M_norm'],
+            A=p.get('A', 1.0),
             FMISS=FMISS,
             SIGMA_OFF=SIGMA_OFF,
             BCG_B_MASS=BCG_B_MASS,

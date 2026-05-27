@@ -155,12 +155,18 @@ PRIORS = {
     "beta":       sp_norm(loc=-0.4, scale=0.2),
     "gamma":      sp_norm(loc=0.0,  scale=3.5),
     "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
+    # Global multiplicative amplitude correction.  Centred on the
+    # simulation-measured spherical-vs-triaxial deficit (~20% low → A≈0.80)
+    # with a tight 2% prior.  Appended after log_M_norm so gamma stays at
+    # index 3 of the posterior samples array.
+    "A":          sp_norm(loc=0.80, scale=0.02),
 }
 PRIOR_LABELS = {
     "c0": r"$c_0$", "alpha": r"$\alpha$", "beta": r"$\beta$",
     "gamma": r"$\gamma$", "log_M_norm": r"$\log M_{\rm norm}$",
+    "A": r"$A$",
 }
-PARAM_ORDER = ["c0", "alpha", "beta", "gamma", "log_M_norm"]
+PARAM_ORDER = ["c0", "alpha", "beta", "gamma", "log_M_norm", "A"]
 
 N_LIVE  = 400
 TIMEOUT = 600
