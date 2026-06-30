@@ -1,0 +1,32 @@
+# LSST-like gamma_scan configuration.
+# Represents a Stage-IV survey with high source density and a large
+# cluster sample drawn from the full LSST footprint.
+#
+# Usage:
+#   python3 gamma_scan.py lsst_like.yaml
+#   or
+#   CONFIG=lsst_like.yaml python3 gamma_scan.py
+
+# ── Source-galaxy survey ──────────────────────────────────────────────────
+density: 40.0      # LSST gold-sample source density [gal/arcmin^2]
+
+# Smail n(z) parameters, p(z) ∝ (z/z0)^α · exp[−(z/z0)^β]:
+smail_alpha: 2.0
+smail_beta:  1.5
+smail_z0:    0.4
+
+# ── Cluster catalogue ─────────────────────────────────────────────────────
+n_clusters:      100000
+z_cluster_range: [0.10, 0.60]
+
+# ── Gamma scan ────────────────────────────────────────────────────────────
+gamma_range: [-1.0, 1.0]
+n_gamma:     51
+
+# ── Bootstrap ─────────────────────────────────────────────────────────────
+bootstrap:   true
+n_bootstrap: 50
+
+# ── Physics switches ──────────────────────────────────────────────────────
+triaxiality:  true
+miscentering: true
