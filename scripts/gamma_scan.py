@@ -58,6 +58,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import pickle
 import sys
 import time
 import traceback
@@ -91,6 +92,7 @@ import xlensing.cosmo as _xlc
 import xlensing.sims as _xlsims
 from xlensing.data import metacal_cluster_lensing, signal
 from xlensing.sims import (
+    apply_NFW_shear_region,
     apply_triaxial_NFW_shear_region,
     make_simple_random_cat,
     r_vir,
@@ -106,30 +108,90 @@ import warnings
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 # ── Scan definition ───────────────────────────────────────────────────────────
-N_GAMMA      = int(os.environ.get("N_GAMMA", 11))
-GAMMA_VALUES = np.linspace(-1.0, 1.0, N_GAMMA)
+# ── YAML configuration ────────────────────────────────────────────────────────
+# Override the defaults below by either (i) passing a YAML file as the first
+# CLI argument or (ii) setting the CONFIG environment variable to its path.
+# YAML wins over the CONFIG env-var, which wins over the per-knob env vars,
+# which win over the hard-coded defaults.  A template is at
+# scripts/gamma_scan_config_example.yaml.
+def _load_yaml_config():
+    path = None
+    # Allow sys.argv[1] when it does not look like an internal nautilus arg
+    if len(sys.argv) > 1 and (sys.argv[1].endswith('.yaml')
+                              or sys.argv[1].endswith('.yml')):
+        path = sys.argv[1]
+    elif os.environ.get("CONFIG", "").strip():
+        path = os.environ["CONFIG"].strip()
+    if path is None:
+        return {}
+    try:
+        import yaml as _yaml
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Cannot load config {path}: PyYAML not installed ({exc!r})"
+        )
+    with open(path) as fh:
+        cfg = _yaml.safe_load(fh) or {}
+    print(f"[gamma_scan] loaded YAML config from {path}", flush=True)
+    return cfg
+
+_CFG = _load_yaml_config()
+
+
+def _cfg(key, env_name, default, cast=None):
+    """YAML > env var > default.  Cast applied for env-var path only; YAML
+    values are taken as-is (PyYAML already gives ints/floats/bools/lists)."""
+    if key in _CFG:
+        return _CFG[key]
+    if env_name and env_name in os.environ:
+        v = os.environ[env_name]
+        return cast(v) if cast else v
+    return default
+
+
+N_GAMMA      = int(_cfg("n_gamma", "N_GAMMA", 51, cast=int))
+_GAMMA_RANGE = _cfg("gamma_range", None, [-1.0, 1.0])
+GAMMA_VALUES = np.linspace(float(_GAMMA_RANGE[0]), float(_GAMMA_RANGE[1]),
+                           N_GAMMA)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-N_CLUSTERS  = int(os.environ.get("N_CLUSTERS",  10000))
-N_BOOTSTRAP = int(os.environ.get("N_BOOTSTRAP", 50))
-N_WORKERS   = int(os.environ.get("N_WORKERS",   15))
+N_CLUSTERS  = int(_cfg("n_clusters",  "N_CLUSTERS",  15000, cast=int))
+N_BOOTSTRAP = int(_cfg("n_bootstrap", "N_BOOTSTRAP", 1,     cast=int))
+N_WORKERS   = int(_cfg("n_workers",   "N_WORKERS",   15,    cast=int))
 
 _n_resample_env = os.environ.get("N_RESAMPLE", "")
 N_RESAMPLE = int(_n_resample_env) if _n_resample_env.strip() else None
 
-BOOTSTRAP = os.environ.get("BOOTSTRAP", "1").strip().lower() \
+def _yaml_bool(v):
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+# triaxiality: true (default) = triaxial NFW; false = pure spherical.
+TRIAXIALITY  = _yaml_bool(_cfg("triaxiality",
+                               "TRIAXIALITY",
+                               not _yaml_bool(os.environ.get("SPHERICAL", "0"))))
+SPHERICAL    = not TRIAXIALITY
+MISCENTERING = _yaml_bool(_cfg("miscentering", "MISCENTERING", True))
+BOOTSTRAP = os.environ.get("BOOTSTRAP", "0").strip().lower() \
             not in ("0", "false", "no", "off")
 if not BOOTSTRAP:
     N_BOOTSTRAP = 1
 
 DELTA_M_REF = 0.1
-RADII       = np.logspace(-0.8, 0.8, 12)
+RADII       = np.logspace(-0.8, 0.6, 8)
 R_MIN_FIT   = 0.5
 
-DES_Y3_Z_CLUSTER_RANGE = (0.2, 0.65)
-DES_Y3_Z_SRC_ALPHA     = 2.0
-DES_Y3_Z_SRC_BETA      = 1.5
-DES_Y3_Z_SRC_Z0        = 0.4
+_Z_CL_RANGE              = _cfg("z_cluster_range", None, [0.10, 0.60])
+DES_Y3_Z_CLUSTER_RANGE = (float(_Z_CL_RANGE[0]), float(_Z_CL_RANGE[1]))
+WAZP_LOGM_RANGE        = (14.0, 15.0)
+WAZP_LAMBDA_MIN        = 25.0
+DES_Y3_Z_SRC_ALPHA     = float(_cfg("smail_alpha", "SMAIL_ALPHA", 2.0,
+                                    cast=float))
+DES_Y3_Z_SRC_BETA      = float(_cfg("smail_beta",  "SMAIL_BETA",  1.5,
+                                    cast=float))
+DES_Y3_Z_SRC_Z0        = float(_cfg("smail_z0",    "SMAIL_Z0",    0.4,
+                                    cast=float))
 N_OVERSAMPLE_CLUSTER   = 5
 
 F_CEN           = 0.64
@@ -137,7 +199,7 @@ SIGMA_OFF_MPC_H = 0.32
 H_PLANCK        = float(_planck18.h)
 SIGMA_OFF_MPC   = SIGMA_OFF_MPC_H / H_PLANCK
 
-DENSITY         = 30
+DENSITY         = float(_cfg("density", "DENSITY", 7.5, cast=float))
 WIDTH_RAD       = 0.006
 Z_SRC_RANGE     = (0.0, 2.5)
 SHAPE_NOISE     = 0.27
@@ -155,18 +217,14 @@ PRIORS = {
     "beta":       sp_norm(loc=-0.4, scale=0.2),
     "gamma":      sp_norm(loc=0.0,  scale=3.5),
     "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
-    # Global multiplicative amplitude correction.  Centred on the
-    # simulation-measured spherical-vs-triaxial deficit (~20% low → A≈0.80)
-    # with a tight 2% prior.  Appended after log_M_norm so gamma stays at
-    # index 3 of the posterior samples array.
-    "A":          sp_norm(loc=0.80, scale=0.02),
+    # NB: A (the global multiplicative amplitude correction) is omitted
+    # so that destacking.fitting.run_sampler_combined fixes it at 1.0.
 }
 PRIOR_LABELS = {
     "c0": r"$c_0$", "alpha": r"$\alpha$", "beta": r"$\beta$",
     "gamma": r"$\gamma$", "log_M_norm": r"$\log M_{\rm norm}$",
-    "A": r"$A$",
 }
-PARAM_ORDER = ["c0", "alpha", "beta", "gamma", "log_M_norm", "A"]
+PARAM_ORDER = ["c0", "alpha", "beta", "gamma", "log_M_norm"]
 
 N_LIVE  = 400
 TIMEOUT = 600
@@ -212,17 +270,40 @@ def _wq(v, w, q):
 # ── Simulation pipeline ───────────────────────────────────────────────────────
 
 def build_truth_catalog(gamma_true, g_idx):
-    n_pool     = N_CLUSTERS * N_OVERSAMPLE_CLUSTER
-    truth_pool = generate_truth_catalog(
-        n_pool, z_range=DES_Y3_Z_CLUSTER_RANGE, logM_range=(13.5, 15.0),
-        delta_m_gamma=0.0, scatter_logc=0.0, seed=_seed(g_idx, 0),
-    )
-    z_pool = np.asarray(truth_pool["z"])
-    w_pool = des_y3_cluster_pdf(z_pool, *DES_Y3_Z_CLUSTER_RANGE)
-    w_pool = w_pool / w_pool.sum()
-    rng_res = np.random.default_rng(_seed(g_idx, 100))
-    idx     = rng_res.choice(n_pool, size=N_CLUSTERS, replace=False, p=w_pool)
-    truth   = truth_pool[np.sort(idx)]
+    # WaZP-matched truth: oversample at logM∈[14,15], then keep the rows
+    # passing Λ>WAZP_LAMBDA_MIN and Δm>0 until N_CLUSTERS pass the cut.
+    # The McClintock+18 Λ-inversion is run inside make_test_data; we
+    # reuse it here purely as a selection filter and discard the noisy
+    # ΔΣ vectors that step also produces.
+    from astropy.table import vstack as _vstack
+
+    batch_size = max(int(N_CLUSTERS / 0.35), 5000)
+    selected   = []
+    n_sel      = 0
+    batch      = 0
+    while n_sel < N_CLUSTERS:
+        batch += 1
+        truth_b = generate_truth_catalog(
+            batch_size,
+            z_range=DES_Y3_Z_CLUSTER_RANGE,
+            logM_range=WAZP_LOGM_RANGE,
+            delta_m_gamma=0.0, scatter_logc=0.0,
+            seed=_seed(g_idx, batch),
+        )
+        cluster_obs_b, _, _ = make_test_data(
+            truth_b, RADII, poisson_richness=True,
+            seed=_seed(g_idx, 50_000 + batch),
+        )
+        truth_b["Lambda"] = cluster_obs_b["Lambda"]
+        keep = ((truth_b["Lambda"]  > WAZP_LAMBDA_MIN)
+              & (truth_b["delta_m"] > 0.0)
+              & np.isfinite(truth_b["delta_m"])
+              & (truth_b["z"] < DES_Y3_Z_CLUSTER_RANGE[1])
+              & (truth_b["z"] >= DES_Y3_Z_CLUSTER_RANGE[0]))
+        truth_b = truth_b[keep]
+        selected.append(truth_b)
+        n_sel += len(truth_b)
+    truth = _vstack(selected)[:N_CLUSTERS]
 
     dm_s    = np.asarray(truth["delta_m"])
     logdm_s = np.log10(np.maximum(dm_s, 1e-6) / DELTA_M_REF)
@@ -254,6 +335,12 @@ def compute_triaxial_shapes(truth, g_idx):
 
 
 def compute_miscentering(g_idx):
+    if not MISCENTERING:
+        # All clusters perfectly centred — used for the no-miscentering
+        # sensitivity test selected via miscentering: false in YAML.
+        return (np.zeros(N_CLUSTERS, dtype=bool),
+                np.zeros(N_CLUSTERS),
+                np.zeros(N_CLUSTERS))
     rng_mis     = np.random.default_rng(_seed(g_idx, 20))
     is_mis      = rng_mis.uniform(0, 1, N_CLUSTERS) > F_CEN
     off_mag_mpc = np.where(
@@ -310,12 +397,25 @@ def _process_cluster(i):
     if len(gal_mc) < 20:
         return i, None, None
 
-    cluster_arr = [
-        0.0, 0.0, z_i, M_i, c_i, a_i,
-        _SHAPES["q_ba"][i] * a_i, _SHAPES["q_ca"][i] * a_i,
-        _SHAPES["theta_los"][i], _SHAPES["phi_los"][i],
-    ]
-    gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc)
+    if SPHERICAL:
+        # Pure spherical NFW: set b=c=a so the projected ellipse degenerates
+        # to a circle and the triaxial-shear pipeline collapses analytically
+        # to the Wright-Brainerd 1999 spherical-NFW formula.  This reuses the
+        # fast vectorised path of apply_triaxial_NFW_shear_region rather than
+        # the per-galaxy Python loop in apply_NFW_shear_region.
+        cluster_arr = [
+            0.0, 0.0, z_i, M_i, c_i, a_i,
+            a_i, a_i,                                # b = c = a → sphere
+            _SHAPES["theta_los"][i], _SHAPES["phi_los"][i],
+        ]
+        gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc)
+    else:
+        cluster_arr = [
+            0.0, 0.0, z_i, M_i, c_i, a_i,
+            _SHAPES["q_ba"][i] * a_i, _SHAPES["q_ca"][i] * a_i,
+            _SHAPES["theta_los"][i], _SHAPES["phi_los"][i],
+        ]
+        gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc)
 
     sources_mc = gal_sheared[:, [0, 1, 2, 3, 4, 9, 5, 6, 7, 8]]
     DA_i       = _DA_FAST(0, z_i)
@@ -326,7 +426,7 @@ def _process_cluster(i):
     bg = metacal_cluster_lensing((cen_ra_i, cen_dec_i, z_i), sources_mc.T,
                                   WIDTH_RAD * DA_i)
     if bg["Count"] < 20:
-        return i, None, None
+        return i, None, None, None
 
     stake = np.array([
         bg["Critical Density"], bg["Tangential Shear"], bg["Cross Shear"],
@@ -345,7 +445,10 @@ def _process_cluster(i):
             cov_d[b] = (
                 SHAPE_NOISE * bg["Critical Density"][m].mean() / np.sqrt(n_b)
             ) ** 2
-    return i, dv, cov_d
+    # Float32 bg for storage; downstream stacked_signal / single_cluster
+    # don't care about precision.
+    bg_arr = stake.astype("float32")
+    return i, dv, cov_d, bg_arr
 
 
 def simulate_lensing(truth, shapes, mis, g_idx):
@@ -371,18 +474,99 @@ def simulate_lensing(truth, shapes, mis, g_idx):
 
     data_vectors = np.zeros((N_CLUSTERS, N_BINS))
     cov_matrices = np.full((N_CLUSTERS, N_BINS, N_BINS), 0.0)
+    bgs          = [None] * N_CLUSTERS
     for i in range(N_CLUSTERS):
         np.fill_diagonal(cov_matrices[i], NOISE_FLOOR_COV)
 
     with mp.Pool(N_WORKERS) as pool:
-        for idx, dv, cov_d in pool.imap(
+        for idx, dv, cov_d, bg in pool.imap(
             _process_cluster, range(N_CLUSTERS), chunksize=10
         ):
             if dv is not None:
                 data_vectors[idx] = dv
                 np.fill_diagonal(cov_matrices[idx], cov_d)
+                bgs[idx]          = bg
 
-    return data_vectors, cov_matrices
+    return data_vectors, cov_matrices, bgs
+
+
+# ── Notebook-compatible per-gamma sim data ────────────────────────────────────
+
+_NOTEBOOK_DATA_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'notebooks', 'data',
+)
+
+
+def _write_notebook_compat_sim(g_idx, gamma_true, truth, cluster_obs, bgs):
+    """Save sim_g{idx:03d}_real_data.fits + sim_g{idx:03d}_bgs.pkl in the
+    layout that wazp_lensing_signals.ipynb and
+    wazp_mass_richness_by_delta_m.ipynb expect when SIMS=True and
+    SIM_PREFIX='sim_g{idx:03d}'."""
+    import json as _json
+    import datetime as _datetime
+    from astropy.table import Table as _Table
+    from astropy.io    import fits as _fits  # noqa: F401  (Table.write needs fits)
+
+    # Distinct prefix per shear/centering combination so non-default
+    # configs don't overwrite the canonical sim_g{idx:03d}_*.  Override
+    # with the YAML 'sim_prefix' or env SIM_PREFIX_ROOT if you want a
+    # custom run name.
+    prefix_default = ('sim_g' if (not SPHERICAL and MISCENTERING)
+                       else ('sim_sph_g' if SPHERICAL and MISCENTERING
+                       else ('sim_nomis_g' if not SPHERICAL
+                       else 'sim_sph_nomis_g')))
+    prefix_root = _cfg("sim_prefix", "SIM_PREFIX_ROOT", prefix_default)
+    prefix      = f'{prefix_root}{g_idx:03d}'
+    fits_p  = os.path.join(_NOTEBOOK_DATA_DIR, f'{prefix}_real_data.fits')
+    bgs_p   = os.path.join(_NOTEBOOK_DATA_DIR, f'{prefix}_bgs.pkl')
+    meta_p  = os.path.join(_NOTEBOOK_DATA_DIR, f'{prefix}_metadata.json')
+    os.makedirs(_NOTEBOOK_DATA_DIR, exist_ok=True)
+
+    # Cluster catalogue: distribute on a non-overlapping RA/Dec grid; the
+    # notebook only reads ID/ZPHOT/NGALS/DELTA_M_I when SIMS=True so the
+    # angular positions are purely formal.
+    n        = len(truth)
+    side     = int(np.ceil(np.sqrt(n)))
+    iy, ix   = np.divmod(np.arange(n), side)
+    step_deg = 0.6
+    ra       = (10.0 + ix * step_deg).astype(float)
+    dec      = (-60.0 + iy * step_deg).astype(float)
+    cid      = np.arange(n, dtype=np.int64)
+
+    tab = _Table({
+        'ID':            cid,
+        'RA':            ra,
+        'DEC':           dec,
+        'NGALS':         np.asarray(cluster_obs['Lambda']).astype('float32'),
+        'ZPHOT':         np.asarray(truth['z']).astype('float32'),
+        'DELTA_M_I':     np.asarray(truth['delta_m']).astype('float32'),
+        'DELTA_M_I_ERR': np.full(n, 0.01, dtype='float32'),
+    })
+    tab.write(fits_p, overwrite=True)
+
+    bgs_by_id = {int(cid[i]): bg
+                 for i, bg in enumerate(bgs) if bg is not None}
+    with open(bgs_p, 'wb') as fh:
+        pickle.dump(bgs_by_id, fh)
+
+    meta = {
+        'gamma':         float(gamma_true),
+        'g_idx':         int(g_idx),
+        'n_truth':       int(n),
+        'n_usable_bgs':  int(len(bgs_by_id)),
+        'density':       DENSITY,
+        'radii_layout':  'np.logspace(-0.8, 0.6, 8)',
+        'shape_noise':   SHAPE_NOISE,
+        'z_src_range':   list(Z_SRC_RANGE),
+        'generated_at':  _datetime.datetime.now().isoformat(timespec='seconds'),
+    }
+    with open(meta_p, 'w') as fh:
+        _json.dump(meta, fh, indent=2)
+
+    print(f"    notebook-compat sim written: "
+          f"{prefix}_real_data.fits ({n:,} clusters), "
+          f"{prefix}_bgs.pkl ({len(bgs_by_id):,} bgs)", flush=True)
 
 
 # ── Simulation checkpointing ──────────────────────────────────────────────────
@@ -484,7 +668,55 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
     lo  = _wq(gamma_s, weights, 0.16)
     med = _wq(gamma_s, weights, 0.50)
     hi  = _wq(gamma_s, weights, 0.84)
-    np.savez_compressed(npz_path, gamma_samples=gamma_s, weights=weights)
+    # Persist the full posterior (all PARAM_ORDER columns) so the corner
+    # plot can be regenerated later without re-running nautilus.
+    np.savez_compressed(npz_path,
+                        gamma_samples=gamma_s,
+                        weights=weights,
+                        all_samples=points,
+                        param_order=np.asarray(PARAM_ORDER))
+
+    # Per-fit corner plot inside this bootstrap subdir.  When BOOTSTRAP=0
+    # there is exactly one bootstrap per gamma, so this lands at
+    # sim_subdir/bootstrap_000/posterior_corner.png — i.e. "inside the
+    # gamma's directory" for the typical no-bootstrap run.
+    try:
+        import corner as _corner
+        labels = [PRIOR_LABELS.get(p, p) for p in PARAM_ORDER]
+        truths = [None] * len(PARAM_ORDER)
+        if "gamma" in PARAM_ORDER:
+            truths[PARAM_ORDER.index("gamma")] = float(gamma_true)
+        if "c0" in PARAM_ORDER:
+            truths[PARAM_ORDER.index("c0")] = float(ols.get("c0_true",
+                                                            np.nan))
+        if "alpha" in PARAM_ORDER:
+            truths[PARAM_ORDER.index("alpha")] = float(ols.get("alpha_true",
+                                                               np.nan))
+        if "beta" in PARAM_ORDER:
+            truths[PARAM_ORDER.index("beta")] = float(ols.get("beta_true",
+                                                              np.nan))
+        fig = _corner.corner(
+            points, weights=weights,
+            labels=labels,
+            truths=truths,
+            truth_color="crimson",
+            quantiles=[0.16, 0.50, 0.84],
+            show_titles=True, title_fmt=".3f",
+            plot_datapoints=False, fill_contours=True,
+            levels=(0.39, 0.86),
+            smooth=1.0,
+        )
+        fig.suptitle(
+            f"posterior — γ_true={gamma_true:+.3f}, "
+            f"γ_med={med:+.3f} ± {(hi - lo) / 2.0:.3f}",
+            y=1.02, fontsize=11,
+        )
+        corner_path = os.path.join(subdir, "posterior_corner.png")
+        fig.savefig(corner_path, dpi=120, bbox_inches="tight")
+        plt.close(fig)
+        print(f"    corner plot → {corner_path}", flush=True)
+    except Exception as exc:
+        print(f"    corner plot skipped: {exc!r}", flush=True)
 
     result = {
         "bootstrap":     b_idx,
@@ -538,7 +770,7 @@ def run_one_gamma(g_idx, gamma_true, run_dir):
         mis    = compute_miscentering(g_idx)
 
         print(f"  simulating lensing ({N_CLUSTERS} clusters) ...", flush=True)
-        data_vectors, cov_matrices = simulate_lensing(truth, shapes, mis, g_idx)
+        data_vectors, cov_matrices, bgs = simulate_lensing(truth, shapes, mis, g_idx)
 
         cluster_obs, _, _ = make_test_data(
             truth, RADII, fractional_noise=0.2,
@@ -549,6 +781,12 @@ def run_one_gamma(g_idx, gamma_true, run_dir):
         save_simulation_checkpoint(
             sim_subdir, truth, ols, cluster_obs, data_vectors, cov_matrices
         )
+
+        # Also write notebook-compatible per-gamma sim data so the
+        # wazp_lensing_signals / wazp_mass_richness_by_delta_m notebooks
+        # can consume this gamma's catalogue and bgs by setting
+        # SIMS=True and SIM_PREFIX=sim_g{idx:03d}.
+        _write_notebook_compat_sim(g_idx, gamma_true, truth, cluster_obs, bgs)
 
     keep             = RADII >= R_MIN_FIT
     RADII_fit        = RADII[keep]
@@ -640,16 +878,67 @@ def run_one_gamma(g_idx, gamma_true, run_dir):
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
-def plot_gamma_scan_results(scan_results, run_dir):
-    """Two-panel: top = true vs estimated; bottom = residuals."""
+def plot_gamma_scan_results(scan_results, run_dir, bin_size=10):
+    """Two-panel: top = true vs estimated; bottom = residuals.  Each panel
+    overlays the median in bins of `bin_size` consecutive γ_true points
+    (sorted), a 68% credible band from the within-bin 16th/84th
+    percentiles, and a linear (γ_est vs γ_true) least-squares fit so the
+    overall slope-1 and offset-0 deviations are quantified."""
     gamma_true = np.array([r["gamma_true"]          for r in scan_results])
     gamma_est  = np.array([r["gamma_ensemble_med"]   for r in scan_results])
     sigma_boot = np.array([r["sigma_boot"]            for r in scan_results])
     gamma_ols  = np.array([r["gamma_true_ols"]        for r in scan_results])
 
-    residuals  = gamma_est - gamma_true
+    # Sort by γ_true so the binning is consecutive in γ.
+    order      = np.argsort(gamma_true)
+    g_t        = gamma_true[order]
+    g_e        = gamma_est[order]
+    s_b        = sigma_boot[order]
+    g_ols_sort = gamma_ols[order]
+    residuals  = g_e - g_t
+
     bias_rms   = float(np.sqrt(np.mean(residuals**2)))
-    mean_sigma = float(np.mean(sigma_boot))
+    mean_sigma = float(np.mean(s_b))
+
+    # Linear fit γ_est = (1 + slope) γ_true + offset  →  residual = slope γ + offset
+    A = np.column_stack([g_t, np.ones_like(g_t)])
+    coeff, *_ = np.linalg.lstsq(A, g_e, rcond=None)
+    fit_slope, fit_offset = float(coeff[0]) - 1.0, float(coeff[1])
+    # Error bars on slope / offset from the residual scatter
+    cov = np.linalg.inv(A.T @ A) * float(np.var(g_e - A @ coeff, ddof=2))
+    fit_slope_err  = float(np.sqrt(cov[0, 0]))
+    fit_offset_err = float(np.sqrt(cov[1, 1]))
+
+    # Binned median + 68% band in bins of `bin_size` consecutive points
+    n = len(g_t)
+    bin_edges = np.arange(0, n + bin_size, bin_size)
+    bin_edges = bin_edges[bin_edges <= n]
+    if bin_edges[-1] != n:
+        bin_edges = np.append(bin_edges, n)
+    bin_centres_x = []
+    bin_med_est   = []
+    bin_lo_est    = []
+    bin_hi_est    = []
+    bin_med_res   = []
+    bin_lo_res    = []
+    bin_hi_res    = []
+    for s, e in zip(bin_edges[:-1], bin_edges[1:]):
+        if e - s < 1:
+            continue
+        bin_centres_x.append(float(np.median(g_t[s:e])))
+        bin_med_est.append(float(np.median(g_e[s:e])))
+        bin_lo_est.append(float(np.percentile(g_e[s:e], 16)))
+        bin_hi_est.append(float(np.percentile(g_e[s:e], 84)))
+        bin_med_res.append(float(np.median(residuals[s:e])))
+        bin_lo_res.append(float(np.percentile(residuals[s:e], 16)))
+        bin_hi_res.append(float(np.percentile(residuals[s:e], 84)))
+    bin_centres_x = np.asarray(bin_centres_x)
+    bin_med_est   = np.asarray(bin_med_est)
+    bin_lo_est    = np.asarray(bin_lo_est)
+    bin_hi_est    = np.asarray(bin_hi_est)
+    bin_med_res   = np.asarray(bin_med_res)
+    bin_lo_res    = np.asarray(bin_lo_res)
+    bin_hi_res    = np.asarray(bin_hi_res)
 
     fig, (ax_top, ax_bot) = plt.subplots(
         2, 1, figsize=(8, 10),
@@ -658,22 +947,32 @@ def plot_gamma_scan_results(scan_results, run_dir):
 
     # ── Top: recovery ─────────────────────────────────────────────────────────
     g_lim = 1.3
+    g_grid = np.linspace(-g_lim, g_lim, 200)
     ax_top.plot([-g_lim, g_lim], [-g_lim, g_lim], "k--", lw=1.2,
                 label="Perfect recovery", zorder=0)
     ax_top.errorbar(
-        gamma_true, gamma_est, yerr=sigma_boot,
-        fmt="o", color="steelblue", capsize=5, markersize=7, lw=1.5,
-        label=r"$\hat\gamma_{\rm ens}$ ± $\sigma_{\rm boot}$", zorder=3,
+        g_t, g_e, yerr=s_b,
+        fmt="o", color="steelblue", capsize=4, markersize=5, lw=1.0,
+        alpha=0.35, zorder=3,
+        label=r"individual $\hat\gamma$ ± $\sigma_{\rm boot}$",
     )
-    ax_top.scatter(gamma_true, gamma_ols, marker="x", s=55, color="darkorange",
-                   zorder=4, label=r"OLS truth $\gamma_{\rm OLS}$")
+    ax_top.fill_between(bin_centres_x, bin_lo_est, bin_hi_est,
+                        color="purple", alpha=0.18, lw=0,
+                        label=f"68% CL (bins of {bin_size})", zorder=4)
+    ax_top.plot(bin_centres_x, bin_med_est, "o-", color="purple", lw=1.6,
+                markersize=6, zorder=5,
+                label=f"median estimate (bins of {bin_size})")
+    ax_top.plot(g_grid, (1.0 + fit_slope) * g_grid + fit_offset,
+                color="crimson", lw=2.0, zorder=6,
+                label=(rf"fit: slope−1 = {fit_slope:+.3f} ± {fit_slope_err:.3f}, "
+                       rf"offset = {fit_offset:+.3f} ± {fit_offset_err:.3f}"))
     ax_top.set_ylabel(r"Estimated $\hat\gamma$", fontsize=12)
     ax_top.set_title(
         rf"Gamma scan — true vs estimated"
         rf"  ($N={N_CLUSTERS}$, {N_BOOTSTRAP} bootstrap draws/γ)",
         fontsize=11,
     )
-    ax_top.legend(fontsize=10)
+    ax_top.legend(fontsize=9, loc="lower right")
     ax_top.grid(alpha=0.3)
     ax_top.set_xlim(-g_lim, g_lim)
     ax_top.set_ylim(-2.0, 2.0)
@@ -689,15 +988,25 @@ def plot_gamma_scan_results(scan_results, run_dir):
     # ── Bottom: residuals ─────────────────────────────────────────────────────
     ax_bot.axhline(0.0, color="k", lw=1.5, ls="--", label="Unbiased")
     ax_bot.errorbar(
-        gamma_true, residuals, yerr=sigma_boot,
-        fmt="o", color="steelblue", capsize=5, markersize=7, lw=1.5,
-        label=r"Residual ± $\sigma_{\rm boot}$",
+        g_t, residuals, yerr=s_b,
+        fmt="o", color="steelblue", capsize=4, markersize=5, lw=1.0,
+        alpha=0.35,
+        label=r"residual ± $\sigma_{\rm boot}$",
     )
     ax_bot.axhspan(-mean_sigma, mean_sigma, alpha=0.10, color="tomato",
                    label=rf"$\langle\sigma_{{\rm boot}}\rangle = {mean_sigma:.4f}$")
+    ax_bot.fill_between(bin_centres_x, bin_lo_res, bin_hi_res,
+                        color="purple", alpha=0.18, lw=0,
+                        label=f"68% CL (bins of {bin_size})")
+    ax_bot.plot(bin_centres_x, bin_med_res, "o-", color="purple", lw=1.6,
+                markersize=6, label=f"median residual (bins of {bin_size})")
+    ax_bot.plot(g_grid, fit_slope * g_grid + fit_offset,
+                color="crimson", lw=2.0,
+                label=(rf"fit: slope = {fit_slope:+.3f} ± {fit_slope_err:.3f}, "
+                       rf"offset = {fit_offset:+.3f} ± {fit_offset_err:.3f}"))
     ax_bot.set_xlabel(r"True $\gamma$", fontsize=12)
     ax_bot.set_ylabel(r"$\hat\gamma_{\rm ens} - \gamma_{\rm true}$", fontsize=12)
-    ax_bot.legend(fontsize=10)
+    ax_bot.legend(fontsize=9, loc="upper left")
     ax_bot.grid(alpha=0.3)
     ax_bot.set_ylim(-1.8, 1.8)
 
@@ -809,7 +1118,14 @@ def main():
         f"  N_CLUSTERS={N_CLUSTERS}, BOOTSTRAP={'on' if BOOTSTRAP else 'off'}, "
         f"N_BOOTSTRAP={N_BOOTSTRAP}, "
         f"N_RESAMPLE={n_resample_actual if BOOTSTRAP else N_CLUSTERS}, "
-        f"N_WORKERS={N_WORKERS}",
+        f"N_WORKERS={N_WORKERS}, "
+        f"SHEAR={'SPHERICAL' if SPHERICAL else 'TRIAXIAL'}, "
+        f"MISCENTERING={'on' if MISCENTERING else 'off'}\n"
+        f"  density={DENSITY} gal/arcmin^2, "
+        f"Smail(α={DES_Y3_Z_SRC_ALPHA},β={DES_Y3_Z_SRC_BETA},"
+        f"z0={DES_Y3_Z_SRC_Z0}), "
+        f"z_cl∈[{DES_Y3_Z_CLUSTER_RANGE[0]:.2f},"
+        f"{DES_Y3_Z_CLUSTER_RANGE[1]:.2f}]",
         flush=True,
     )
     print(f"Output directory: {RUN_DIR}", flush=True)
