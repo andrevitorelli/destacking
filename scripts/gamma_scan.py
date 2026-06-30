@@ -173,8 +173,7 @@ TRIAXIALITY  = _yaml_bool(_cfg("triaxiality",
                                not _yaml_bool(os.environ.get("SPHERICAL", "0"))))
 SPHERICAL    = not TRIAXIALITY
 MISCENTERING = _yaml_bool(_cfg("miscentering", "MISCENTERING", True))
-BOOTSTRAP = os.environ.get("BOOTSTRAP", "0").strip().lower() \
-            not in ("0", "false", "no", "off")
+BOOTSTRAP = _yaml_bool(_cfg("bootstrap", "BOOTSTRAP", False))
 if not BOOTSTRAP:
     N_BOOTSTRAP = 1
 
