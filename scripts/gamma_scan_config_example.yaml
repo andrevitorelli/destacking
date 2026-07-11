@@ -8,32 +8,35 @@
 # Any key omitted falls back to (i) the matching environment variable
 # (uppercase form, see the comments), or (ii) the hard-coded default.
 
-# ── Source-galaxy survey ──────────────────────────────────────────────────
+# Source-galaxy survey
 density:     7.5     # mean galaxy density of the survey [gal/arcmin^2]
                      # (DENSITY env var)
 
-# Smail n(z) parameters, p(z) ∝ (z/z0)^α · exp[−(z/z0)^β]:
+# Smail n(z) parameters, p(z) proportional to (z/z0)^alpha * exp[-(z/z0)^beta]:
 smail_alpha: 2.0     # SMAIL_ALPHA env var
 smail_beta:  1.5     # SMAIL_BETA env var
 smail_z0:    0.4     # SMAIL_Z0   env var
 
-# ── Cluster catalogue ─────────────────────────────────────────────────────
+# Cluster catalogue
 n_clusters:      15000           # N_CLUSTERS env var
 z_cluster_range: [0.10, 0.60]    # truth-catalog redshift range
 
-# ── Gamma scan ────────────────────────────────────────────────────────────
+# Gamma scan
 gamma_range: [-1.0, 1.0]   # endpoints of np.linspace
-n_gamma:     51            # N_GAMMA env var
+n_gamma:     51             # N_GAMMA env var
 
-# ── Bootstrap (per-cluster sample resampling) ─────────────────────────────
-n_bootstrap: 1             # N_BOOTSTRAP env var; ignored when bootstrap=false
-bootstrap:   false         # post-hoc bootstrap on/off (BOOTSTRAP env var)
+# Bootstrap (likelihood-level resampling over the cluster sample)
+n_bootstrap:     1          # N_BOOTSTRAP env var; ignored when bootstrap=false
+bootstrap:       false      # post-hoc bootstrap on/off (BOOTSTRAP env var)
+n_cov_bootstrap: 200        # galaxy resamples used by single_cluster to compute
+                            # the per-cluster full covariance matrix
+                            # (N_COV_BOOTSTRAP env var)
 
-# ── Physics switches ──────────────────────────────────────────────────────
+# Physics switches
 triaxiality:  true   # true = triaxial NFW; false = pure spherical
 miscentering: true   # true = realistic miscentering; false = all clusters centred
 
-# ── Optional file-prefix override ─────────────────────────────────────────
+# Optional file-prefix override
 # Default prefix is chosen automatically based on triaxiality/miscentering
 # so that non-default configs don't clobber the canonical sim_g{idx:03d}_*.
 # Set this to use your own naming.

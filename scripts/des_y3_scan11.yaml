@@ -1,0 +1,28 @@
+# DES Y3-like 11-point gamma scan, WaZP-sized cluster sample.
+# gamma from -0.5 to +1.0 (step 0.15), 15000 clusters per gamma.
+# Combined-posterior ensemble measurement per gamma (mixture of the
+# 50 cluster-bootstrap posteriors).
+
+density:     7.5
+shape_noise: 0.27
+
+smail_alpha: 2.0
+smail_beta:  1.5
+smail_z0:    0.4
+
+n_clusters:      15000
+z_cluster_range: [0.10, 0.60]
+
+gamma_range: [-0.5, 1.0]
+n_gamma:     11
+
+bootstrap:       true
+n_bootstrap:     50
+n_cov_bootstrap: 200
+
+triaxiality:  true
+miscentering: true
+
+# v3 pipeline: Gaussian shape sampler + per-bin bootstrap masking
+#              + response-consistent shear injection (2026-07-11)
+sim_prefix: 'sim_desy3_scan11_v3_g'

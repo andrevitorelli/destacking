@@ -7,3 +7,4 @@
 !*.toml
 !*.yaml
 !*.yml
+scripts/gamma_scan_outputs/

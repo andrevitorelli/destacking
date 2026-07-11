@@ -10,9 +10,12 @@ Design
       for b = 0 .. N_BOOTSTRAP-1:              # 50 bootstrap draws per gamma
           idx  = bootstrap resample of {0..N_CLUSTERS-1}     (BOOTSTRAP=1)
                  OR np.arange(N_CLUSTERS)  full sample       (BOOTSTRAP=0)
-          run nautilus on data[idx]  →  γ̂^b
-      gamma_ensemble = median_b(γ̂^b)
-      sigma_boot     = std_b(γ̂^b)   (= 0 when BOOTSTRAP=0 and N_BOOTSTRAP=1)
+          run nautilus on data[idx]  →  posterior_b(γ)
+      combined posterior = equal-weight mixture of the posterior_b
+      gamma_ensemble = median of the combined posterior
+      sigma_gamma    = 16-84 half-width of the combined posterior
+      (std_b of the per-bootstrap medians is kept as a diagnostic,
+       "sigma_med_scatter")
 
   Final output:
       gamma_scan_results.png    two-panel plot: γ_true vs γ_est + residuals
@@ -59,6 +62,7 @@ import datetime
 import json
 import os
 import pickle
+import shutil
 import sys
 import time
 import traceback
@@ -74,7 +78,6 @@ from scipy.interpolate import interp1d
 from scipy.stats import gaussian_kde
 from scipy.stats import norm as sp_norm
 
-import ngmix
 
 from destacking.fitting import run_sampler_combined
 from destacking.model import _MC_M_PIVOT_LOG, _MC_Z_REF, _nfw_profiles
@@ -90,7 +93,7 @@ from destacking.simulation import (
 
 import xlensing.cosmo as _xlc
 import xlensing.sims as _xlsims
-from xlensing.data import metacal_cluster_lensing, signal
+from xlensing.data import metacal_cluster_lensing, bootstrap_signal
 from xlensing.sims import (
     apply_NFW_shear_region,
     apply_triaxial_NFW_shear_region,
@@ -115,6 +118,7 @@ warnings.filterwarnings('ignore', category=RuntimeWarning)
 # which win over the hard-coded defaults.  A template is at
 # scripts/gamma_scan_config_example.yaml.
 def _load_yaml_config():
+    """Returns (config dict, path to the YAML file or None)."""
     path = None
     # Allow sys.argv[1] when it does not look like an internal nautilus arg
     if len(sys.argv) > 1 and (sys.argv[1].endswith('.yaml')
@@ -123,7 +127,7 @@ def _load_yaml_config():
     elif os.environ.get("CONFIG", "").strip():
         path = os.environ["CONFIG"].strip()
     if path is None:
-        return {}
+        return {}, None
     try:
         import yaml as _yaml
     except ImportError as exc:
@@ -133,9 +137,9 @@ def _load_yaml_config():
     with open(path) as fh:
         cfg = _yaml.safe_load(fh) or {}
     print(f"[gamma_scan] loaded YAML config from {path}", flush=True)
-    return cfg
+    return cfg, path
 
-_CFG = _load_yaml_config()
+_CFG, _CFG_PATH = _load_yaml_config()
 
 
 def _cfg(key, env_name, default, cast=None):
@@ -155,9 +159,10 @@ GAMMA_VALUES = np.linspace(float(_GAMMA_RANGE[0]), float(_GAMMA_RANGE[1]),
                            N_GAMMA)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-N_CLUSTERS  = int(_cfg("n_clusters",  "N_CLUSTERS",  15000, cast=int))
-N_BOOTSTRAP = int(_cfg("n_bootstrap", "N_BOOTSTRAP", 1,     cast=int))
-N_WORKERS   = int(_cfg("n_workers",   "N_WORKERS",   15,    cast=int))
+N_CLUSTERS      = int(_cfg("n_clusters",      "N_CLUSTERS",      15000, cast=int))
+N_BOOTSTRAP     = int(_cfg("n_bootstrap",     "N_BOOTSTRAP",     1,     cast=int))
+N_WORKERS       = int(_cfg("n_workers",       "N_WORKERS",       15,    cast=int))
+N_COV_BOOTSTRAP = int(_cfg("n_cov_bootstrap", "N_COV_BOOTSTRAP", 200,   cast=int))
 
 _n_resample_env = os.environ.get("N_RESAMPLE", "")
 N_RESAMPLE = int(_n_resample_env) if _n_resample_env.strip() else None
@@ -198,11 +203,10 @@ SIGMA_OFF_MPC_H = 0.32
 H_PLANCK        = float(_planck18.h)
 SIGMA_OFF_MPC   = SIGMA_OFF_MPC_H / H_PLANCK
 
-DENSITY         = float(_cfg("density", "DENSITY", 7.5, cast=float))
+DENSITY         = float(_cfg("density",     "DENSITY",     7.5,  cast=float))
+SHAPE_NOISE     = float(_cfg("shape_noise", "SHAPE_NOISE", 0.27, cast=float))
 WIDTH_RAD       = 0.006
 Z_SRC_RANGE     = (0.0, 2.5)
-SHAPE_NOISE     = 0.27
-NOISE_FLOOR_COV = 1e4
 
 _log_r = np.log10(RADII)
 _dlog  = np.diff(_log_r)[0]
@@ -233,7 +237,9 @@ RUN_DIR = os.environ.get(
     "RUN_DIR",
     os.path.join("gamma_scan_outputs", f"run_{_DEFAULT_RUN_TS}"),
 )
-os.makedirs(RUN_DIR, exist_ok=True)
+# RUN_DIR is only a path here; it is created (and the config copied into
+# it) inside main(), so importing this module for analysis leaves no
+# empty run directories behind.
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -358,18 +364,76 @@ _G_IDX_SIM   = 0
 
 
 def _process_cluster(i):
+    """Simulate and measure the lensing signal of one cluster, end to end.
+
+    Runs inside a ``multiprocess.Pool`` worker.  All shared inputs come
+    from the module globals set by :func:`simulate_lensing` before the
+    pool dispatch (``_TRUTH``, ``_SHAPES``, ``_OFF_MAG_MPC``, ``_PHI_MIS``,
+    ``_DA_FAST``, ``_G_IDX_SIM``) — the function's only argument is the
+    cluster index, so ``pool.imap`` can stream over ``range(N_CLUSTERS)``.
+
+    Pipeline stages
+    ---------------
+    1. Draw a random source-galaxy catalog around the cluster (Poisson
+       density ``DENSITY`` gal/arcmin², aperture half-width ``WIDTH_RAD``).
+    2. Assign DES Y3-like source redshifts (Smail distribution), lognormal
+       metacal responses, and intrinsic shapes (per-component Gaussian
+       with RMS ``SHAPE_NOISE``, redrawn until |e| < 1).
+    3. Cut to sources behind the cluster (z_s > 1.1 z_l + 0.2, matching the
+       metacal selection inside xlensing).
+    4. Shear the sources with the triaxial NFW model using the cluster's
+       true (M, c, shape, orientation), scaling each galaxy's shear by its
+       metacal response so the response-corrected estimator is unbiased;
+       ``SPHERICAL`` collapses the triaxial code to the spherical
+       Wright-Brainerd profile by setting b = c = a.
+    5. Measure from a possibly miscentered position (offset ``_OFF_MAG_MPC``
+       at angle ``_PHI_MIS``) via ``metacal_cluster_lensing``.
+    6. Estimate the per-cluster data vector and covariance with
+       ``bootstrap_signal`` — the same estimator for both, no boost
+       correction, no noise floor.  Bins that fail the bootstrap (too few
+       galaxies for a finite, positive variance) are NaN in the data vector
+       and are dropped from this cluster's likelihood by cholog_gaussian.
+
+    Reproducibility: every random stage uses ``_seed(g_idx, offset + i)``
+    with disjoint offset blocks (1000 shapes, 4000 positions, 5000
+    redshifts, 6000 responses), so any cluster can be regenerated
+    identically without running the others.
+
+    Returns
+    -------
+    (i, dv, cov, bg_arr) : tuple
+        ``i``      — the cluster index (echoed back for imap bookkeeping).
+        ``dv``     — (N_BINS,) bootstrap-mean ΔΣ_t [M☉/pc²], NaN in
+                     failed bins.
+        ``cov``    — (N_BINS, N_BINS) bootstrap covariance; failed
+                     rows/columns hold inert identity placeholders that
+                     the likelihood never reads.
+        ``bg_arr`` — (6, N_src) float32 stake (Σ_crit, e_t, e_x, W, R, M)
+                     kept so notebooks can re-stack the raw signal.
+    (i, None, None, None)
+        Cluster rejected: fewer than 20 sources behind it, fewer than 20
+        inside the measurement aperture, or no bin survived the bootstrap.
+        The caller leaves its data vector all-NaN, so it is skipped by the
+        likelihood rather than contributing zeros.
+    """
+    # True cluster properties for index i (γ enters through _TRUTH's
+    # concentrations, generated upstream by build_truth_catalog).
     z_i = float(_TRUTH["z"][i])
     M_i = float(_TRUTH["M_halo"][i])
     c_i = float(_TRUTH["concentration"][i])
     a_i = _SHAPES["r_vir"][i]
     g_i = _G_IDX_SIM
 
+    # Stage 1 — random source positions (metacal catalog layout:
+    # ra, dec, z, e1, e2, R11, R12, R21, R22, w).  Shapes/z/responses are
+    # placeholders here and get overwritten below with their own streams.
     gal_i  = make_simple_random_cat(
         DENSITY, WIDTH_RAD, Z_SRC_RANGE, shape_noise=0.0,
         seed=_seed(g_i, 4000 + i), poisson_density=True,
     ).T
     n_gals = len(gal_i)
 
+    # Stage 2a — source redshifts from the DES Y3 Smail fit.
     rng_src = np.random.default_rng(_seed(g_i, 5000 + i))
     gal_i[:, 2] = sample_des_y3_source_z(
         n_gals, rng_src,
@@ -377,6 +441,8 @@ def _process_cluster(i):
         alpha=DES_Y3_Z_SRC_ALPHA, beta=DES_Y3_Z_SRC_BETA, z0=DES_Y3_Z_SRC_Z0,
     )
 
+    # Stage 2b — diagonal metacal response tied to a lognormal size proxy
+    # (small/noisy galaxies respond less); off-diagonal terms zero.
     rng_resp = np.random.default_rng(_seed(g_i, 6000 + i))
     sizes    = rng_resp.lognormal(mean=np.log(0.5), sigma=0.5, size=n_gals)
     R_RESP   = np.clip(1.0 - (sizes / 1.5) ** 2, 0.05, 0.99)
@@ -385,17 +451,38 @@ def _process_cluster(i):
     gal_i[:, 7] = 0.0
     gal_i[:, 8] = R_RESP
 
+    # Stage 2c — intrinsic shapes: per-component Gaussian with |e| < 1
+    # enforced by redraw.  ngmix's GPriorBA sampler is unreliable at small
+    # sigma (its rejection sampling floors at rms ≈ 0.04) and its (1-g²)²
+    # truncation shifts the delivered rms below sigma, so we draw directly:
+    # SHAPE_NOISE is the per-component ellipticity RMS by construction.
     rng_sh = np.random.default_rng(_seed(g_i, 1000 + i))
-    sp_i   = ngmix.priors.shape.GPriorBA(sigma=SHAPE_NOISE, rng=rng_sh)
-    e1, e2 = sp_i.sample2d(n_gals)
+    e1 = rng_sh.normal(0.0, SHAPE_NOISE, n_gals)
+    e2 = rng_sh.normal(0.0, SHAPE_NOISE, n_gals)
+    bad = e1 ** 2 + e2 ** 2 >= 1.0
+    while bad.any():
+        n_bad = int(bad.sum())
+        e1[bad] = rng_sh.normal(0.0, SHAPE_NOISE, n_bad)
+        e2[bad] = rng_sh.normal(0.0, SHAPE_NOISE, n_bad)
+        bad = e1 ** 2 + e2 ** 2 >= 1.0
     gal_i[:, 3] = e1
     gal_i[:, 4] = e2
 
+    # Stage 3 — keep only sources behind the cluster.  Same cut as the
+    # metacal path in xlensing, applied early so we only shear survivors.
     mc_mask = gal_i[:, 2] > 1.1 * z_i + 0.2
     gal_mc  = gal_i[mc_mask]
     if len(gal_mc) < 20:
-        return i, None, None
+        return i, None, None, None
 
+    # Stage 4 — inject the NFW shear.  Cluster tuple layout expected by
+    # apply_triaxial_NFW_shear_region:
+    # (ra, dec, z, M200, c200, a, b, c, theta_los, phi_los), axes in Mpc.
+    # The per-galaxy metacal response (col 5; R11 = R22, off-diag 0) scales
+    # the injected shear so the response-corrected signal() estimator
+    # recovers the true amplitude — without it every ΔΣ comes out
+    # inflated by 1/⟨Rt⟩ ≈ 1.2.
+    resp_i = gal_mc[:, 5]
     if SPHERICAL:
         # Pure spherical NFW: set b=c=a so the projected ellipse degenerates
         # to a circle and the triaxial-shear pipeline collapses analytically
@@ -407,15 +494,23 @@ def _process_cluster(i):
             a_i, a_i,                                # b = c = a → sphere
             _SHAPES["theta_los"][i], _SHAPES["phi_los"][i],
         ]
-        gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc)
+        gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc,
+                                                      response=resp_i)
     else:
         cluster_arr = [
             0.0, 0.0, z_i, M_i, c_i, a_i,
             _SHAPES["q_ba"][i] * a_i, _SHAPES["q_ca"][i] * a_i,
             _SHAPES["theta_los"][i], _SHAPES["phi_los"][i],
         ]
-        gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc)
+        gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc,
+                                                      response=resp_i)
 
+    # Stage 5 — measure from the (possibly miscentered) observed position.
+    # Column reorder puts the weight (col 9) after the shapes, matching the
+    # metacal_cluster_lensing source layout
+    # (ra, dec, z, e1, e2, w, R11, R12, R21, R22).  The true center is at
+    # the origin; the offset (drawn in Mpc upstream) converts to radians
+    # through the angular diameter distance.
     sources_mc = gal_sheared[:, [0, 1, 2, 3, 4, 9, 5, 6, 7, 8]]
     DA_i       = _DA_FAST(0, z_i)
     off_rad_i  = _OFF_MAG_MPC[i] / DA_i
@@ -427,27 +522,35 @@ def _process_cluster(i):
     if bg["Count"] < 20:
         return i, None, None, None
 
+    # Standard xlensing stake layout: rows (Σ_crit, e_t, e_x, W, R, M).
     stake = np.array([
         bg["Critical Density"], bg["Tangential Shear"], bg["Cross Shear"],
         bg["Weights"], bg["Radial Distance"], bg["Mult. Bias"],
     ])
-    sig_t, _ = signal(stake, BIN_LIMITS)
-    dv = np.nan_to_num(sig_t, nan=0.0)
 
-    R      = bg["Radial Distance"]
-    in_bin = (R[:, None] > BIN_LIMITS[:, 0]) & (R[:, None] < BIN_LIMITS[:, 1])
-    cov_d  = np.full(N_BINS, NOISE_FLOOR_COV)
-    for b in range(N_BINS):
-        m   = in_bin[:, b]
-        n_b = m.sum()
-        if n_b >= 5:
-            cov_d[b] = (
-                SHAPE_NOISE * bg["Critical Density"][m].mean() / np.sqrt(n_b)
-            ) ** 2
-    # Float32 bg for storage; downstream stacked_signal / single_cluster
-    # don't care about precision.
+    # Stage 6 — data vector and covariance from the same bootstrap estimator
+    # (signal(), no boost correction) so both are consistent with the NFW
+    # model in the likelihood, which also does not include a boost.
+    # bootstrap_signal handles failure per bin: bins without enough galaxies
+    # for a finite, positive bootstrap variance come back as NaN.  Those NaN
+    # entries stay in the data vector so cholog_gaussian drops exactly the
+    # failed bins from this cluster's likelihood — no noise floor anywhere.
+    sigmas, sigmas_cov, _, _ = bootstrap_signal(
+        stake, BIN_LIMITS, Nboot=N_COV_BOOTSTRAP
+    )
+    valid_bins = np.isfinite(sigmas)
+    if not valid_bins.any():
+        return i, None, None, None
+    dv = sigmas
+
+    # Failed bins get placeholder identity entries in the stored covariance;
+    # they are never used because cholog_gaussian masks on NaN in dv.
+    cov = np.where(np.isfinite(sigmas_cov), sigmas_cov, 0.0)
+    cov[~valid_bins, ~valid_bins] = 1.0
+
+    # Float32 bg for storage; downstream stacked_signal doesn't need precision.
     bg_arr = stake.astype("float32")
-    return i, dv, cov_d, bg_arr
+    return i, dv, cov, bg_arr
 
 
 def simulate_lensing(truth, shapes, mis, g_idx):
@@ -471,19 +574,22 @@ def simulate_lensing(truth, shapes, mis, g_idx):
     _DA_FAST      = DA_fast
     _G_IDX_SIM    = g_idx
 
-    data_vectors = np.zeros((N_CLUSTERS, N_BINS))
-    cov_matrices = np.full((N_CLUSTERS, N_BINS, N_BINS), 0.0)
-    bgs          = [None] * N_CLUSTERS
+    # Clusters that fail _process_cluster keep an all-NaN data vector, so
+    # cholog_gaussian skips them entirely (per-bin NaN masking).  The identity
+    # covariance is a placeholder that is never read for skipped entries.
+    data_vectors = np.full((N_CLUSTERS, N_BINS), np.nan)
+    cov_matrices = np.zeros((N_CLUSTERS, N_BINS, N_BINS))
     for i in range(N_CLUSTERS):
-        np.fill_diagonal(cov_matrices[i], NOISE_FLOOR_COV)
+        np.fill_diagonal(cov_matrices[i], 1.0)
+    bgs          = [None] * N_CLUSTERS
 
     with mp.Pool(N_WORKERS) as pool:
-        for idx, dv, cov_d, bg in pool.imap(
+        for idx, dv, cov, bg in pool.imap(
             _process_cluster, range(N_CLUSTERS), chunksize=10
         ):
             if dv is not None:
                 data_vectors[idx] = dv
-                np.fill_diagonal(cov_matrices[idx], cov_d)
+                cov_matrices[idx] = cov   # full (N_BINS, N_BINS) matrix
                 bgs[idx]          = bg
 
     return data_vectors, cov_matrices, bgs
@@ -742,8 +848,10 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
 
 # ── Per-gamma simulation + bootstrap loop ─────────────────────────────────────
 
-def run_one_gamma(g_idx, gamma_true, run_dir):
+def run_one_gamma(g_idx, gamma_true, run_dir, run_t0=None):
     """Simulate once + run N_BOOTSTRAP bootstrap draws for a single gamma value."""
+    gamma_t0   = time.time()
+    n_total_g  = len(GAMMA_VALUES)
     sim_subdir = os.path.join(run_dir, gamma_dir_name(g_idx, gamma_true))
     os.makedirs(sim_subdir, exist_ok=True)
     ens_path   = os.path.join(sim_subdir, "ensemble_summary.json")
@@ -793,10 +901,12 @@ def run_one_gamma(g_idx, gamma_true, run_dir):
     cov_matrices_fit = cov_matrices[:, keep][:, :, keep]
 
     # ── Bootstrap loop ───────────────────────────────────────────────────────
-    results      = []
-    failures     = []
-    attempt_idx  = 0
-    max_attempts = 4 * N_BOOTSTRAP
+    sim_phase_dur = time.time() - gamma_t0   # wall time for sim + measurement
+    results       = []
+    failures      = []
+    attempt_idx   = 0
+    max_attempts  = 4 * N_BOOTSTRAP
+    b_durations   = []   # wall times of non-cached bootstrap fits
 
     while len(results) < N_BOOTSTRAP and attempt_idx < max_attempts:
         b_subdir     = os.path.join(sim_subdir, f"bootstrap_{attempt_idx:03d}")
@@ -817,6 +927,7 @@ def run_one_gamma(g_idx, gamma_true, run_dir):
             f"\n  [{len(results)+1}/{N_BOOTSTRAP}] bootstrap_{attempt_idx:03d}",
             flush=True,
         )
+        b_t0 = time.time()
         try:
             r = run_one_bootstrap(
                 attempt_idx, sim_subdir,
@@ -824,6 +935,31 @@ def run_one_gamma(g_idx, gamma_true, run_dir):
                 data_vectors_fit, cov_matrices_fit, RADII_fit,
             )
             results.append(r)
+            b_dt = time.time() - b_t0
+            b_durations.append(b_dt)
+            b_done  = len(results)
+            avg_b   = float(np.mean(b_durations))
+            eta_b   = avg_b * (N_BOOTSTRAP - b_done)
+            est_gamma = sim_phase_dur + N_BOOTSTRAP * avg_b
+            eta_scan  = eta_b + (n_total_g - g_idx - 1) * est_gamma
+            print(
+                f"    fit took {_fmt_duration(b_dt)}; "
+                f"avg/fit {_fmt_duration(avg_b)}; "
+                f"ETA this γ {_fmt_duration(eta_b)}; "
+                f"ETA full scan {_fmt_duration(eta_scan)}",
+                flush=True,
+            )
+            # ── Live result after every completed bootstrap ──────────────────
+            g_meds_so_far = np.array([res["gamma_med"] for res in results])
+            run_mean = float(np.mean(g_meds_so_far))
+            run_std  = float(np.std(g_meds_so_far, ddof=1)) if b_done > 1 else float("nan")
+            print(
+                f"  >>> LIVE [{b_done}/{N_BOOTSTRAP}]  "
+                f"γ_true={gamma_true:+.4f}  "
+                f"γ_this={r['gamma_med']:+.4f} ± {r['sigma_gamma']:.4f}  "
+                f"|  running mean={run_mean:+.4f}  std={run_std:.4f}",
+                flush=True,
+            )
         except KeyboardInterrupt:
             raise
         except Exception as exc:
@@ -836,24 +972,55 @@ def run_one_gamma(g_idx, gamma_true, run_dir):
         raise RuntimeError(f"{gamma_dir_name(g_idx, gamma_true)}: all bootstrap draws failed")
 
     # ── Ensemble statistics ───────────────────────────────────────────────────
+    # Primary measurement: the MIXTURE of the bootstrap posteriors.  Each
+    # bootstrap's weights already sum to 1 when saved, so pooling samples
+    # with weights/N_b gives every bootstrap equal mass.  The mixture width
+    # carries both the within-fit posterior width and the between-bootstrap
+    # scatter, so it stays honest even where individual posteriors are
+    # overconfident.
     gamma_meds  = np.array([r["gamma_med"]   for r in results])
     sigma_posts = np.array([r["sigma_gamma"] for r in results])
-    ens_med     = float(np.median(gamma_meds))
-    mean_sigma  = float(np.mean(sigma_posts))
-    if len(gamma_meds) > 1:
-        # Multi-draw bootstrap: error from spread of bootstrap medians
-        sigma_boot = float(np.std(gamma_meds, ddof=1))
+    pool_s, pool_w = [], []
+    for r in results:
+        npz_path = os.path.join(
+            sim_subdir, f"bootstrap_{r['bootstrap']:03d}", "gamma_posterior.npz"
+        )
+        if not os.path.exists(npz_path):
+            continue
+        data = np.load(npz_path)
+        w = data["weights"]
+        pool_s.append(data["gamma_samples"])
+        pool_w.append(w / w.sum())
+
+    if pool_s:
+        pool_s = np.concatenate(pool_s)
+        pool_w = np.concatenate(pool_w)
+        pool_w = pool_w / pool_w.sum()
+        comb_lo  = float(_wq(pool_s, pool_w, 0.16))
+        comb_med = float(_wq(pool_s, pool_w, 0.50))
+        comb_hi  = float(_wq(pool_s, pool_w, 0.84))
     else:
-        # Single fit (BOOTSTRAP=0): error is the single posterior's 16/84
-        # half-width, since std-of-one is undefined.
-        sigma_boot = float(sigma_posts[0])
+        # No saved posteriors (should not happen) — fall back to medians
+        comb_med = float(np.median(gamma_meds))
+        comb_lo  = comb_med - float(np.median(sigma_posts))
+        comb_hi  = comb_med + float(np.median(sigma_posts))
+    sigma_comb = (comb_hi - comb_lo) / 2.0
+
+    # Diagnostics: the previous summary statistics
+    med_scatter = (float(np.std(gamma_meds, ddof=1)) if len(gamma_meds) > 1
+                   else float(sigma_posts[0]))
 
     ens_result = {
         "g_idx":              g_idx,
         "gamma_true":         float(gamma_true),
-        "gamma_ensemble_med": ens_med,
-        "sigma_boot":         sigma_boot,
-        "mean_sigma_post":    mean_sigma,
+        "gamma_ensemble_med": comb_med,
+        "gamma_ensemble_lo":  comb_lo,
+        "gamma_ensemble_hi":  comb_hi,
+        "sigma_gamma":        sigma_comb,
+        # diagnostics (pre-mixture statistics)
+        "gamma_med_of_meds":  float(np.median(gamma_meds)),
+        "sigma_med_scatter":  med_scatter,
+        "mean_sigma_post":    float(np.mean(sigma_posts)),
         "n_bootstrap":        len(results),
         "n_failures":         len(failures),
         **ols,
@@ -861,8 +1028,9 @@ def run_one_gamma(g_idx, gamma_true, run_dir):
     with open(ens_path, "w") as f:
         json.dump(ens_result, f, indent=2)
     print(
-        f"  γ={gamma_true:+.1f}  γ_est={ens_med:+.4f}  "
-        f"σ_boot={sigma_boot:.4f}  bias={ens_med - gamma_true:+.4f}",
+        f"  γ={gamma_true:+.1f}  γ_est={comb_med:+.4f} ± {sigma_comb:.4f} "
+        f"(combined posterior, N={len(results)} bootstraps)  "
+        f"bias={comb_med - gamma_true:+.4f}",
         flush=True,
     )
 
@@ -885,7 +1053,7 @@ def plot_gamma_scan_results(scan_results, run_dir, bin_size=10):
     overall slope-1 and offset-0 deviations are quantified."""
     gamma_true = np.array([r["gamma_true"]          for r in scan_results])
     gamma_est  = np.array([r["gamma_ensemble_med"]   for r in scan_results])
-    sigma_boot = np.array([r["sigma_boot"]            for r in scan_results])
+    sigma_boot = np.array([r["sigma_gamma"]           for r in scan_results])
     gamma_ols  = np.array([r["gamma_true_ols"]        for r in scan_results])
 
     # Sort by γ_true so the binning is consecutive in γ.
@@ -1021,6 +1189,7 @@ def _plot_posteriors_overlay(results, sim_subdir, gamma_true):
     x_grid  = np.linspace(-2.5, 2.5, 800)
     cmap    = plt.cm.viridis
     n       = len(results)
+    pool_s, pool_w = [], []
     for k, r in enumerate(results):
         npz_path = os.path.join(
             sim_subdir, f"bootstrap_{r['bootstrap']:03d}", "gamma_posterior.npz"
@@ -1030,10 +1199,23 @@ def _plot_posteriors_overlay(results, sim_subdir, gamma_true):
         data    = np.load(npz_path)
         samples = data["gamma_samples"]
         weights = data["weights"]
+        pool_s.append(samples)
+        pool_w.append(weights / weights.sum())
         try:
             kde = gaussian_kde(samples, weights=weights, bw_method=0.15)
             ax.plot(x_grid, kde(x_grid),
                     color=cmap(k / max(n - 1, 1)), alpha=0.55, lw=1.0)
+        except Exception:
+            pass
+    # Combined (mixture) posterior over all bootstraps — the measurement
+    if pool_s:
+        try:
+            pool_s_c = np.concatenate(pool_s)
+            pool_w_c = np.concatenate(pool_w)
+            pool_w_c = pool_w_c / pool_w_c.sum()
+            kde_comb = gaussian_kde(pool_s_c, weights=pool_w_c, bw_method=0.15)
+            ax.plot(x_grid, kde_comb(x_grid),
+                    color="black", lw=3.0, label="Combined posterior")
         except Exception:
             pass
     ax.plot(x_grid, PRIORS["gamma"].pdf(x_grid),
@@ -1056,27 +1238,27 @@ def print_scan_table(scan_results):
     print("\n" + "=" * 82, flush=True)
     print(
         f'{"g_idx":>6}  {"gamma_true":>10}  {"gamma_est":>10}  '
-        f'{"sigma_boot":>10}  {"bias":>8}  {"bias/sig":>8}',
+        f'{"sigma_gamma":>11}  {"bias":>8}  {"bias/sig":>8}',
         flush=True,
     )
     print("-" * 82, flush=True)
     for r in scan_results:
         bias = r["gamma_ensemble_med"] - r["gamma_true"]
-        bsig = bias / max(r["sigma_boot"], 1e-12)
+        bsig = bias / max(r["sigma_gamma"], 1e-12)
         print(
             f'{r["g_idx"]:>6d}  {r["gamma_true"]:>+10.3f}  '
             f'{r["gamma_ensemble_med"]:>+10.4f}  '
-            f'{r["sigma_boot"]:>10.4f}  '
+            f'{r["sigma_gamma"]:>11.4f}  '
             f'{bias:>+8.4f}  '
             f'{bsig:>+8.2f}',
             flush=True,
         )
     residuals = np.array([r["gamma_ensemble_med"] - r["gamma_true"] for r in scan_results])
-    sig_boots = np.array([r["sigma_boot"] for r in scan_results])
+    sig_gammas = np.array([r["sigma_gamma"] for r in scan_results])
     print("-" * 82, flush=True)
     print(
         f"RMS bias = {np.sqrt(np.mean(residuals**2)):.4f}   "
-        f"mean(sigma_boot) = {np.mean(sig_boots):.4f}",
+        f"mean(sigma_gamma) = {np.mean(sig_gammas):.4f}",
         flush=True,
     )
 
@@ -1096,7 +1278,7 @@ def write_progress(scan_results, run_dir, run_t0, n_total):
                 "g_idx":      r["g_idx"],
                 "gamma_true": r["gamma_true"],
                 "gamma_est":  round(r["gamma_ensemble_med"], 4),
-                "sigma_boot": round(r["sigma_boot"], 4),
+                "sigma_gamma": round(r["sigma_gamma"], 4),
                 "bias":       round(r["gamma_ensemble_med"] - r["gamma_true"], 4),
             }
             for r in scan_results
@@ -1109,6 +1291,14 @@ def write_progress(scan_results, run_dir, run_t0, n_total):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    os.makedirs(RUN_DIR, exist_ok=True)
+    # Provenance: keep a copy of the run's config in the output root.  Only
+    # for a fresh run — on resume (RUN_DIR reused) the original record is kept.
+    if _CFG_PATH is not None:
+        cfg_dest = os.path.join(RUN_DIR, os.path.basename(_CFG_PATH))
+        if not os.path.exists(cfg_dest):
+            shutil.copy2(_CFG_PATH, cfg_dest)
+
     n_resample_actual = N_RESAMPLE if N_RESAMPLE is not None else N_CLUSTERS
     n_total           = len(GAMMA_VALUES)
 
@@ -1151,7 +1341,7 @@ def main():
             continue
 
         try:
-            r = run_one_gamma(g_idx, gamma_true, RUN_DIR)
+            r = run_one_gamma(g_idx, gamma_true, RUN_DIR, run_t0=run_t0)
             scan_results.append(r)
         except KeyboardInterrupt:
             print(

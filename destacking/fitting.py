@@ -12,30 +12,39 @@ def cholog_gaussian(data_vectors, cov_matrices):
     """
     Simultaneous Gaussian log-likelihood for N data vectors of size k.
 
-    Returns ``-np.inf`` if any cluster yields a non-finite contribution.
-    The nautilus sampler is happy with ``-np.inf`` but treats NaN as a
-    silent failure (``f_live = nan``), so we never return NaN.
+    Bins where ``data_vectors[i]`` is NaN are treated as masked: only the
+    finite bins participate in the Cholesky likelihood for that cluster.
+    This lets per-cluster bin masks (too few expected galaxies) propagate
+    from the data-prep step without requiring a separate mask array.
+
+    A cluster with zero valid bins contributes nothing to the likelihood.
+    Returns ``-np.inf`` if any cluster yields a non-finite contribution
+    on its valid bins, so the nautilus sampler never sees NaN.
 
     Parameters
     ----------
     data_vectors : ndarray (N, k)
-        Per-cluster residual vectors (data minus model).
+        Per-cluster residual vectors (data minus model).  NaN marks invalid bins.
     cov_matrices : ndarray (N, k, k)
-        Per-cluster covariance matrices.
+        Per-cluster covariance matrices.  Rows/cols for NaN bins are unused.
     """
     n, k = data_vectors.shape
     total_log_lik = 0.0
     log_2pi = np.log(2 * np.pi)
 
     for i in range(n):
-        if not np.all(np.isfinite(data_vectors[i])):
-            return -np.inf
+        valid = np.isfinite(data_vectors[i])      # (k,) — per-bin mask
+        if not valid.any():
+            continue                               # no valid bins — skip cluster
+        dv_i  = data_vectors[i][valid]
+        cov_i = cov_matrices[i][np.ix_(valid, valid)]
+        k_eff = int(valid.sum())
         try:
-            L = np.linalg.cholesky(cov_matrices[i])
-            y = np.linalg.solve(L, data_vectors[i])
+            L = np.linalg.cholesky(cov_i)
+            y = np.linalg.solve(L, dv_i)
             quad_form = float(np.dot(y, y))
-            log_det = 2.0 * float(np.sum(np.log(np.diag(L))))
-            log_lik = -0.5 * (k * log_2pi + log_det + quad_form)
+            log_det   = 2.0 * float(np.sum(np.log(np.diag(L))))
+            log_lik   = -0.5 * (k_eff * log_2pi + log_det + quad_form)
         except (np.linalg.LinAlgError, ValueError, FloatingPointError):
             return -np.inf
         if not np.isfinite(log_lik):
