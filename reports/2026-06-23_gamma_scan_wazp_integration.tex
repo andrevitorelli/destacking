@@ -1,0 +1,491 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage{float}
+
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\newcommand{\DS}{\Delta\Sigma}
+\newcommand{\sigcrit}{\Sigma_{\rm crit}}
+\newcommand{\Msun}{M_{\odot}}
+\newcommand{\Lsun}{L_{\odot}}
+\newcommand{\Mpc}{\,\mathrm{Mpc}}
+\newcommand{\pc}{\,\mathrm{pc}}
+\newcommand{\arcmin}{\,\mathrm{arcmin}}
+\newcommand{\gtrue}{\gamma_{\rm true}}
+\newcommand{\gest}{\hat\gamma}
+\newcommand{\dmref}{\Delta m_{\rm ref}}
+\newcommand{\lpiv}{\lambda_{\rm piv}}
+\newcommand{\zpiv}{z_{\rm piv}}
+
+\title{\textbf{End-to-end WaZP-matched $\gamma$-scan:\\
+simulation pipeline, notebook integration, and the role of the
+amplitude correction $A$}}
+\author{destacking project}
+\date{2026 June 23}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report documents three pieces of work that together make the
+destacking $\gamma$-recovery scan run on a fully WaZP-matched
+simulation, feed the same simulation back into the
+\verb|wazp_lensing_signals.ipynb| and \verb|wazp_mass_richness_by_delta_m.ipynb|
+analysis notebooks, and resolve the question of whether the global
+$\DS$-amplitude correction $A$ should be retained. The simulation
+pipeline produces 15,000 truth clusters drawn from a Tinker-08 mass
+function with a Zheng-07 HOD and a per-cluster magnitude gap derived
+from a power-law satellite LF, with observable richness $\Lambda$
+obtained by inverting the McClintock+18 mass-richness relation. The
+WaZP selection ($\Lambda > 25$, $\Delta m > 0$, $0.10 \le z < 0.60$) is
+applied at the truth level, and per-cluster shear catalogues are
+injected with the spherical NFW model at the WaZP-matched source
+density $\rho = 7.5\,\mathrm{gal}/\mathrm{arcmin}^{2}$. Two 51-point
+$\gamma$-scans were run --- one with $A$ free under a tight
+$\mathcal{N}(0.80, 0.02)$ prior, one with $A$ pinned at 1.0 ---
+producing RMS biases of 0.310 and 0.334 respectively, indistinguishable
+at the per-fit $\langle\sigma_{\rm boot}\rangle \approx 0.033$
+precision. We therefore drop the amplitude correction from all future
+$\DS$ fits.
+\end{abstract}
+
+\tableofcontents
+\bigskip
+
+
+\section{Scope}
+\label{sec:scope}
+
+Three deliverables, building on one another:
+
+\begin{enumerate}
+\item A WaZP-matched simulation pipeline in
+      \verb|scripts/gamma_scan.py| that builds the truth catalogue, the
+      observable richness, the magnitude gap, and the per-cluster
+      lensing background -- all from physically motivated distributions
+      -- and writes outputs in two complementary forms: \texttt{npz}
+      checkpoints inside the $\gamma$-scan tree, and notebook-compatible
+      \texttt{.fits} + \texttt{.pkl} files that the analysis notebooks
+      can load as if they were the real WaZP catalogue.
+\item A \verb|SIMS=True| toggle in both
+      \verb|wazp_lensing_signals.ipynb| and
+      \verb|wazp_mass_richness_by_delta_m.ipynb|, so the same
+      cell-by-cell analysis can run on the simulated catalogue without
+      any code changes.
+\item Two 51-point $\gamma$-scans demonstrating that the global
+      $\DS$-amplitude correction $A$ has negligible effect on
+      $\gamma$-recovery, motivating dropping it from the fit.
+\end{enumerate}
+
+The cluster catalogue follows the same upstream selection as
+\verb|wazp_mass_richness_by_delta_m.ipynb|: $\Lambda > 25$, $\Delta m > 0$
+(positive magnitude gap), and $0.10 \le z_{\rm cluster} < 0.60$. Truth
+masses are drawn from a Tinker-08 mass function restricted to
+$\log_{10}(M/\Msun) \in [14.0, 15.0]$ to keep the oversampling
+efficiency $\sim$30\% at the $\Lambda > 25$ cut.
+
+
+\section{Simulation pipeline}
+\label{sec:sim}
+
+The pipeline lives in \verb|scripts/gamma_scan.py| (with helper
+functions in \verb|destacking.simulation|) and runs once per
+$\gamma$ value. Its steps are:
+
+\subsection{Truth catalogue}
+
+For each $\gamma$ index $g$, we oversample
+\verb|destacking.simulation.generate_truth_catalog| in batches until
+$N_{\rm cl} = 15\,000$ clusters survive the WaZP selection. For each
+draw of $N$ candidates:
+
+\paragraph{Mass.}
+$\log_{10}(M_{\rm halo})$ is sampled from a Tinker-08
+mass function restricted to $[14.0, 15.0]$,
+\begin{equation}
+\log_{10} M \;\sim\; n_{\rm Tinker08}(M, z),
+\qquad z \sim \mathcal{U}(0.10, 0.60).
+\end{equation}
+
+\paragraph{Concentration.}
+The NFW concentration follows Dutton \& Maccio (2014) with a 0.1\,dex
+lognormal scatter:
+\begin{equation}
+\log_{10} c_{\rm DM}(M, z)
+\;=\; a(z) + b(z)\,\log_{10}\!\bigl(M / 10^{12}\Msun\bigr),
+\quad
+c \;=\; c_{\rm DM} \cdot 10^{\mathcal{N}(0,\,0.1)}.
+\end{equation}
+
+\paragraph{Magnitude gap.}
+A Zheng-07 HOD assigns satellite counts; satellite luminosities are
+drawn from a power-law luminosity function $\phi(L) \propto L^{\alpha}$
+with $\alpha = -1.2$, truncated below $L_{\rm min} = 10^{8}\Lsun$.
+The brightest satellite luminosity sets the magnitude gap,
+\begin{equation}
+\Delta m \;=\; 2.5\,\log_{10}\!\bigl(L_{\rm BCG} / L_{\rm sat,\,max}\bigr),
+\end{equation}
+where $L_{\rm BCG}$ is the BCG luminosity from the Zheng et al.\ 2007
+prescription applied to the truth mass.
+
+\paragraph{Observable richness $\Lambda$.}
+Inverting the McClintock+18 mass-richness relation,
+\begin{equation}
+\log_{10}\Lambda
+\;=\;
+\log_{10}\lpiv \;+\;
+\frac{\log_{10} M - \log_{10} M_{0} - g_{z}\log_{10}\bigl(\tfrac{1+z}{1+\zpiv}\bigr)}{F_{\Lambda}},
+\end{equation}
+with $\lpiv = 40$, $\zpiv = 0.35$, $\log_{10} M_{0} = 14.489$,
+$F_{\Lambda} = 1.356$, $g_{z} = -0.30$, and a Poisson noise wrap
+$\Lambda_{\rm obs} \sim \mathrm{Poisson}(\Lambda_{\rm pred})$.
+
+\paragraph{Selection.}
+We keep
+$\Lambda > 25$, $\Delta m > 0$, $z \in [0.10, 0.60)$, and the
+overall efficiency $\sim 35\%$ leaves $N_{\rm cl} = 15\,000$ surviving
+clusters after $\sim$3 batches of 43\,000 draws.
+
+\paragraph{$\Delta m$--$c$ modulation.}
+The single dial driving the $\gamma$-scan is a post-hoc rescaling of
+the truth concentration as a function of $\Delta m$,
+\begin{equation}
+c \;\to\; c \cdot \biggl(\frac{\Delta m}{\dmref}\biggr)^{\gtrue},
+\qquad
+\dmref = 0.1\,\mathrm{mag},
+\label{eq:dmc}
+\end{equation}
+applied after the truth catalogue is otherwise complete. $\gtrue = 0$
+recovers the unmodified Dutton-Maccio concentration.
+
+\subsection{Per-cluster shear catalogues}
+
+For each surviving cluster $i$ we generate an independent metacal-style
+source catalogue with
+\verb|xlensing.sims.make_simple_random_cat|, at the WaZP-matched density
+\begin{equation}
+\rho_{\rm gal} = 7.5\,\arcmin^{-2},
+\quad
+\sigma_e = 0.27,
+\quad
+z_{\rm src} \in (0, 2.5),
+\end{equation}
+uniformly distributed inside a square of half-width
+$\text{WIDTH\_RAD} = (R_{\rm cone} + 0.3\Mpc) / D_{A}(z_{i})$, which
+contains the 5\,Mpc cone with a small margin. We inject the spherical
+NFW shear at the cluster's $(z_{i}, M_{i}, c_{i})$ with
+\verb|xlensing.sims.apply_NFW_shear_region|, then reduce with
+\verb|metacal_cluster_lensing| at a 5\,Mpc cone radius.
+
+The per-cluster reduction returns the 6-row background array
+\begin{equation}
+\mathrm{bg}_{i} \;=\;
+\bigl[\,
+\sigcrit,\;
+e_{t},\;
+e_{x},\;
+W,\;
+R\,[\Mpc],\;
+M_{\rm bias}
+\,\bigr],
+\end{equation}
+which is the input form expected by \verb|stacked_signal| and
+\verb|single_cluster|. The radial grid is
+\begin{equation}
+R_{b} \;=\; \mathtt{np.logspace(-0.8,\,0.6,\,8)}
+\;=\; [0.158,\, 0.251,\, \ldots,\, 3.981]\Mpc.
+\end{equation}
+
+\subsection{Notebook-compatible outputs}
+
+For each $\gamma$ index, a helper
+\verb|_write_notebook_compat_sim| writes three files into
+\verb|notebooks/data/|:
+\begin{align}
+& \texttt{sim\_g\{idx:03d\}\_real\_data.fits}
+&& \text{cluster catalogue (ID, RA, DEC, ZPHOT, NGALS, DELTA\_M\_I, DELTA\_M\_I\_ERR)}\\
+& \texttt{sim\_g\{idx:03d\}\_bgs.pkl}
+&& \text{dict: ID $\to$ per-cluster bg array (6 $\times$ N$_{\rm gal}$, float32)}\\
+& \texttt{sim\_g\{idx:03d\}\_metadata.json}
+&& \text{$\gamma_{\rm true}$, seed, density, generation timestamp}
+\end{align}
+The catalogue schema matches \verb|wazp_real_data.fits| column-for-column;
+positions are placed on a non-overlapping RA/Dec grid at 0.6$^{\circ}$
+spacing so that any geometric lookup the notebooks perform stays
+well-defined, even though the actual bgs are pre-computed and looked up
+by ID.
+
+The simulated lensing run is the bottleneck: at 15 workers the per-cluster
+shear injection + reduction takes $\approx 13$\,min for 15\,000 clusters.
+
+
+\section{Notebook integration: the SIMS toggle}
+\label{sec:notebooks}
+
+Both analysis notebooks now expose two switches at the top of their
+\verb|imports| cell:
+\begin{verbatim}
+SIMS       = False    # True to run on a simulated catalogue
+SIM_PREFIX = 'sim'    # picks up sim_real_data.fits + sim_bgs.pkl
+\end{verbatim}
+When \verb|SIMS=True|, every downstream path that consumes the WaZP
+catalogue or the metacal source pre-filter is re-routed to the
+sim equivalents:
+\begin{itemize}
+\item \verb|WAZP_REAL| $\to$ \verb|data/{SIM_PREFIX}_real_data.fits|
+\item \verb|SIM_BGS_PKL| points to \verb|data/{SIM_PREFIX}_bgs.pkl|
+\item All output files (stacks, fits, M--$\lambda$, c--M pickles) get the
+      \verb|sim_| prefix.
+\end{itemize}
+The metacal pre-filter (\verb|§2|), BallTree build (\verb|§3|), and
+spatial cone queries (\verb|§5| worker) all short-circuit when SIMS is
+on: the worker dispatches to a dict lookup
+\verb|SIM_BGS_BY_ID[cluster_id]| instead of querying a BallTree.
+
+For \verb|wazp_lensing_signals.ipynb|, the cluster-scatter
+diagnostic (\verb|cluster-scatter| cell) was patched separately to
+skip the source-galaxy redshift histogram in SIMS mode (the source
+arrays are \verb|None| there). The y-axis of the \verb|compare| cell
+(§9, avg-of-individuals vs stack residual) was tightened to
+$[-150, 100]\%$ to match the dynamic range needed when the sim shows
+narrow residuals but the real data plunges past $-100\%$.
+
+The user picks a specific $\gamma$ by setting \verb|SIM_PREFIX = 'sim_g025'|
+for $\gtrue = 0$, \verb|'sim_g050'| for $\gtrue = +1$, etc. (51 sims
+are on disk; see Section~\ref{sec:scan}).
+
+
+\section{The $\gamma$-scan: configuration and the result-summary plot}
+\label{sec:scan}
+
+\verb|scripts/gamma_scan.py| was updated to run the scan on the new
+WaZP-style catalogue and to produce a richer summary plot:
+
+\paragraph{Configuration.}
+\begin{itemize}
+\item \verb|N_GAMMA = 51|, $\gtrue$ linearly spaced over $[-1, +1]$.
+\item \verb|N_CLUSTERS = 15000|, \verb|DENSITY = 7.5|,
+      \verb|RADII = np.logspace(-0.8, 0.6, 8)|.
+\item \verb|BOOTSTRAP = 0|, \verb|N_BOOTSTRAP = 1|: one full-sample
+      nautilus fit per $\gamma$. The user decided that the scatter
+      \emph{across} $\gtrue$ already quantifies the recovery bias, so
+      post-hoc bootstrap draws are unnecessary.
+\item Reported error per fit: 16/84 half-width of the single
+      posterior on $\gamma$.
+\end{itemize}
+
+\paragraph{Summary plot.}
+\verb|plot_gamma_scan_results(scan_results, run_dir, bin_size=10)|
+produces a two-panel figure (top: $\gest$ vs $\gtrue$; bottom: residual)
+overlaying three layers in each panel:
+\begin{itemize}
+\item \textbf{Light-blue individual fits} with $\sigma_{\rm boot}$
+      errorbars (faded so the trend is visible through them).
+\item \textbf{Purple binned-median line} with circles. The data are
+      sorted by $\gtrue$ and grouped into bins of $b = 10$ consecutive
+      points; the median and the 16th/84th percentiles inside each bin
+      give the central curve and the shaded 68\% credible band.
+\item \textbf{Crimson linear-regression line}
+      $\gest = (1 + s)\,\gtrue + \delta$ fit by OLS to the unbinned
+      data, with $s$ and $\delta$ reported in the legend.
+\end{itemize}
+Because the user later asked for the OLS-truth crosses to be removed
+(the black dashed perfect-recovery line is sufficient), they were
+dropped from the plot. The function lives in
+\verb|gamma_scan.py| and is rerun automatically at the end of every
+scan, so future scans get the same layout.
+
+
+\section{Per-gamma posterior corner plots}
+\label{sec:corner}
+
+\verb|run_one_bootstrap| was extended to save a corner plot per fit.
+The \verb|gamma_posterior.npz| inside each bootstrap subdirectory now
+carries the full posterior (all PARAM\_ORDER columns) under the
+\verb|all_samples| key, alongside the weights and the marginal $\gamma$
+samples. After each fit, \verb|corner.corner| renders a 5-parameter
+corner on the live posterior, with:
+\begin{itemize}
+\item titles showing 16/50/84 quantiles,
+\item filled 1$\sigma$/2$\sigma$ contours,
+\item smoothed marginals,
+\item crimson truth lines for the four parameters with an OLS-derived
+      truth ($c_{0}$, $\alpha$, $\beta$, $\gamma$).
+\end{itemize}
+Each corner lands at
+\verb|simulation_g{idx:02d}_gamma{±X.X}/bootstrap_000/posterior_corner.png|.
+The corner is generated regardless of whether bootstrapping is enabled.
+
+Figure~\ref{fig:corner-g0} shows the corner for $\gtrue = 0$ from
+the second scan. The diagnostic surfaces non-trivial posterior
+structure: $c_{0}$ is visibly bimodal, $\beta$ jams against the upper
+edge of its $\mathcal{N}(-0.4, 0.2)$ prior, and the $\gamma$ posterior
+is essentially Gaussian but offset to $\gest = -0.291 \pm 0.053$. The
+posterior is not a posterior-shape pathology; it is a real failure mode
+of the joint fit that the population scan made visible.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{../scripts/gamma_scan_outputs/run_2026-06-13T10-26-14/simulation_g25_gamma+0.0/bootstrap_000/posterior_corner.png}
+\caption{Sample per-gamma posterior corner from the A-fixed scan, at
+$\gtrue = 0$. Crimson lines mark the OLS-derived truth values for
+$c_{0}$, $\alpha$, $\beta$, $\gamma$; the $\log M_{\rm norm}$
+truth is at 0 by construction. The bimodality in $c_{0}$ and the
+$\beta$ rail-hit are visible immediately --- exactly the kind of
+diagnostic a per-fit corner is meant to surface, which is missing
+when only ensemble summaries are kept.}
+\label{fig:corner-g0}
+\end{figure}
+
+
+\section{Two $\gamma$-scans: $A$ free vs.\ $A$ fixed}
+\label{sec:Atest}
+
+\subsection{Set-up}
+
+Two scans were run back-to-back on exactly the same simulation
+pipeline, differing only in whether the global $\DS$ amplitude
+correction $A$ was sampled or fixed at 1.0. The fitting model that the
+$\gamma$-scan uses is, schematically,
+\begin{equation}
+\widehat\DS_{\rm model}(R; \theta)
+\;=\;
+A \cdot \DS_{\rm NFW}\!\left(R \mid M(\Lambda, z; \log M_{\rm norm}),
+       c(M, z, \Delta m; c_{0}, \alpha, \beta, \gamma)\right),
+\label{eq:model}
+\end{equation}
+with the magnitude-gap modulation
+02............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+Run~A had a prior
+$A \sim \mathcal{N}(0.80, 0.02)$, centred on the simulation-measured
+spherical-vs-triaxial $\sim$20\% deficit. Run~B omitted $A$ from the
+prior dict so that \verb|destacking.fitting.run_sampler_combined|
+internally fixed $A = 1.0$. Both used the same priors on
+$\{c_{0}, \alpha, \beta, \gamma, \log M_{\rm norm}\}$.
+
+\subsection{Result}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{l c c c c}
+\toprule
+run & $A$ status & RMS bias of $\gest$ & $\langle\sigma_{\rm boot}\rangle$ & total wall \\
+\midrule
+\verb|run_2026-06-12T12-49-51| & $A \sim \mathcal{N}(0.80, 0.02)$ & 0.310 & 0.034 & 7h 36m \\
+\verb|run_2026-06-13T10-26-14| & $A = 1.0$ (fixed)                & 0.334 & 0.033 & 7h 34m \\
+\bottomrule
+\end{tabular}
+\caption{Summary of the two $\gamma$-scans. The difference in RMS bias
+is 0.024 --- smaller than the typical per-fit
+$\sigma_{\rm boot} \approx 0.033$ --- and the mean per-fit
+uncertainty is identical to 1\%. Fixing $A$ at unity has negligible
+effect on $\gamma$-recovery.}
+\label{tab:Acompare}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.62\linewidth]{../scripts/gamma_scan_outputs/run_2026-06-12T12-49-51/gamma_scan_results.png}\\[1em]
+\includegraphics[width=0.62\linewidth]{../scripts/gamma_scan_outputs/run_2026-06-13T10-26-14/gamma_scan_results.png}
+\caption{$\gamma$-scan recovery plots. \textbf{Top:} run~A
+($A \sim \mathcal{N}(0.80, 0.02)$). \textbf{Bottom:} run~B
+($A = 1.0$). Light-blue points are individual fits; the purple curve
+and band are the binned median and the 16/84 percentile band over
+groups of 10 consecutive $\gtrue$ values; the crimson line is the
+linear fit $\gest = (1 + s)\,\gtrue + \delta$ with $s$ and $\delta$
+reported in the legend. The two scans are statistically
+indistinguishable except for a single $\gtrue \approx +0.32$ rail-hit
+that landed differently between runs --- consistent with the
+multi-modality already visible in Fig.~\ref{fig:corner-g0}.}
+\label{fig:Acompare}
+\end{figure}
+
+The reproducible failure modes are:
+\begin{itemize}
+\item \textbf{Negative tail ($\gtrue \lesssim -0.5$).} A floor at
+      $\gest \approx -0.50$ that the fit refuses to break through.
+      Visible as a flat plateau in both panels of
+      Fig.~\ref{fig:Acompare}. Not affected by $A$.
+\item \textbf{Positive tail ($\gtrue \gtrsim +0.5$).} Multi-modal
+      likelihood; nautilus occasionally lands at $\gest \approx +1.4$
+      with $\sigma_{\rm boot} \approx 10^{-3}$ (a "confident" wrong
+      mode). The five $\gtrue$ values affected (+0.32, +0.52, +0.64,
+      +0.72, +0.88) are exactly the same in both scans. Again, not
+      sensitive to $A$.
+\item \textbf{Mid-range ($|\gtrue| \lesssim 0.5$).} The recovery
+      tightens; the binned-median trace runs within $\pm 0.05$ of
+      truth.
+\end{itemize}
+
+\subsection{Decision}
+
+Since the amplitude correction has no measurable effect on
+$\gamma$-recovery and was already at the edge of its prior in many
+fits, we drop it. Operationally:
+\begin{itemize}
+\item In \verb|scripts/gamma_scan.py|, the \verb|PRIORS| dict no
+      longer contains \verb|'A'|, and \verb|PARAM_ORDER| omits it.
+      \verb|destacking.fitting.run_sampler_combined| fixes
+      $A = 1.0$ internally when the key is absent.
+\item This is recorded as the auto-memory entry
+      \verb|feedback_no_amplitude_correction.md| so future fit scripts
+      and notebooks inherit the directive.
+\end{itemize}
+
+
+\section{Empty-directory cleanup}
+
+After the back-to-back scans, the user noticed several empty run
+directories left over from aborted earlier scans. We listed them with
+\verb|find -type d -empty| and deleted the seven:
+\begin{itemize}
+\item \verb|scripts/gamma_scan_outputs/run_2026-06-13T00-35-14|
+      (aborted earlier today),
+\item \verb|scripts/gamma_scan_outputs/.ipynb_checkpoints|
+      (Jupyter cache),
+\item \verb|gamma_scan_outputs/run_2026-05-24T10-19-00|,
+      \verb|run_2026-05-26T16-50-23|, \verb|...16-50-24|,
+      \verb|...16-50-26|, \verb|...16-52-31|.
+\end{itemize}
+All non-empty runs were untouched.
+
+
+\section{Summary}
+
+\begin{itemize}
+\item \verb|scripts/gen_sim_data_for_notebooks.py| and the
+      \verb|_write_notebook_compat_sim| hook inside
+      \verb|gamma_scan.py| produce 15\,000-cluster WaZP-style sims with
+      per-cluster bgs, ready to be consumed by both analysis notebooks
+      via the \verb|SIMS=True| toggle.
+\item The \verb|gamma_scan.py| pipeline was rewritten to oversample
+      truth until the WaZP selection passes 15\,000 clusters, run a
+      single nautilus fit per $\gamma$, and emit a per-gamma posterior
+      corner plot. The summary recovery plot now overlays a binned
+      median, 68\%~CL band, and linear regression.
+\item Two 51-point scans confirm that fixing $A = 1.0$ vs.\ leaving it
+      free under a tight $\mathcal{N}(0.80, 0.02)$ prior changes the
+      RMS $\gamma$-recovery bias by 0.024 --- below the per-fit noise
+      floor. We drop $A$.
+\item 51 sets of \verb|sim_g{000..050}_real_data.fits| +
+      \verb|sim_g{000..050}_bgs.pkl| are on disk, ready for any
+      per-$\gamma$ inspection inside the notebooks.
+\end{itemize}
+
+\noindent Outputs:
+\begin{itemize}
+\item \verb|gamma_scan_outputs/run_2026-06-12T12-49-51/| (A free)
+\item \verb|gamma_scan_outputs/run_2026-06-13T10-26-14/| (A fixed),
+      including 51 \verb|posterior_corner.png| files.
+\item \verb|notebooks/data/sim_g{000..050}_*| for the analysis
+      notebooks under \verb|SIMS=True|.
+\end{itemize}
+
+\end{document}

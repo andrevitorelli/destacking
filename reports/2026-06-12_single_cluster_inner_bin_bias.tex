@@ -1,0 +1,469 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{siunitx}
+
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\newcommand{\DS}{\Delta\Sigma}
+\newcommand{\sigcrit}{\Sigma_{\rm crit}}
+\newcommand{\Msun}{M_{\odot}}
+\newcommand{\Mpc}{\,\mathrm{Mpc}}
+\newcommand{\pc}{\,\mathrm{pc}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Ex}{\operatorname{E}}
+
+\title{\textbf{Average of per-cluster $\Delta\Sigma$ profiles vs.\
+galaxy-level stacked $\Delta\Sigma$:\\
+the WaZP small-$R$ failure does not reproduce in a
+WaZP-matched simulation}}
+\author{destacking project}
+\date{2026 June 12}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The §9 diagnostic cell of \verb|wazp_lensing_signals.ipynb| forms the
+unweighted mean of per-cluster $\DS$ profiles (from
+\verb|xlensing.data.single_cluster|) and compares it to the stacked
+$\DS$ from \verb|xlensing.data.stacked_signal| measured on the same
+clusters but through the (z, NGALS, $\Delta m$) binning of
+\verb|wazp_mass_richness_by_delta_m.ipynb|.  In the innermost radial
+bins the comparison residual
+$(\langle\DS\rangle_{\rm ind} - \DS_{\rm stack})/\DS_{\rm stack}$
+drops sharply toward $-100\%$.  We reproduce the entire diagnostic on
+a tightly matched simulation -- 15\,000 truth clusters drawn from a
+realistic mass function (Tinker-08, restricted to the WaZP-relevant
+$\log_{10} M \in [14.0, 15.0]$), Zheng-07 HOD, power-law satellite LF
+$\Rightarrow$ per-cluster magnitude gap, McClintock+18 inversion to
+$\Lambda$, the WaZP selection ($\Lambda > 25$, $\Delta m > 0$,
+$0.10 \le z < 0.60$), source catalogues at galaxy density matched to
+the WaZP-filtered metacal density ($\rho = 7.5\,
+\mathrm{gal}/\mathrm{arcmin}^{2}$), full DES Y3 shape noise
+$\sigma_{e} = 0.27$, identical 5\,Mpc cone, identical radial bins, and
+identical \verb|single_cluster| + \verb|stacked_signal| reductions on
+the 24 $(z, \Lambda, \Delta m)$ stacks.  The simulation \emph{does
+not} reproduce the dip-to-$-100\%$; per-stack residuals scatter around
+zero within $\sim\pm 30\%$.  The proximate driver in the WaZP data is
+a heavy-tailed per-cluster $\widehat\DS_c$ distribution: $3.4\%$ of
+clusters report $|\widehat\DS_c(R_{\rm inner})| > 10^{4}\,
+\Msun/\pc^{2}$, with a maximum of order $10^{7}$, none of which appear
+in the simulation.  The unweighted mean of Eq.~\eqref{eq:avg} has no
+defence against such outliers, and a handful per stack are enough to
+swing the diagnostic across the entire plotted range.
+\end{abstract}
+
+\tableofcontents
+\bigskip
+
+
+\section{What we are testing}
+\label{sec:test}
+
+For a set of clusters $\{c\}$ and radial bins $\{b\}$ define
+\begin{itemize}
+\item the \emph{stacked} $\DS$ profile,
+      $\DS_{\rm stack}(R_b)$, returned by
+      \verb|xlensing.data.stacked_signal|;
+\item the \emph{per-cluster} $\DS$ profile,
+      $\widehat\DS_{c}(R_b)$, returned by
+      \verb|xlensing.data.single_cluster| once per cluster $c$; and
+\item the \emph{unweighted mean of per-cluster profiles}
+      \begin{equation}
+      \langle\DS\rangle_{\rm ind}(R_b)
+       \;=\;
+       \frac{1}{|\mathrm{used}_b|}
+       \sum_{c \in \mathrm{used}_b}
+        \widehat\DS_{c}(R_b),
+       \label{eq:avg}
+       \end{equation}
+       summed over the clusters whose per-cluster $\widehat\DS_{c}$ is
+       finite in bin $b$.
+\end{itemize}
+There is no covariance, no inverse-variance weighting, and no fit
+involved -- only a comparison of two numbers per bin.  The residual we
+plot is
+\begin{equation}
+\rho(R_b) \;=\;
+\frac{\langle\DS\rangle_{\rm ind}(R_b) - \DS_{\rm stack}(R_b)}
+     {\DS_{\rm stack}(R_b)} \,\times\, 100\,\%.
+\label{eq:residual}
+\end{equation}
+
+
+\section{Estimators}
+\label{sec:estimators}
+
+Both estimators use the same per-galaxy quantities -- $\sigcrit$,
+$e_t$, $e_x$, $w$, $R$, $M$ -- defined and divided by $10^{12}$ inside
+\verb|xlensing.data.metacal_cluster_lensing|.  For each radial bin $b$
+let $\mathbb{1}_b(g)$ be the in-bin indicator.
+
+\subsection{Stacked: \texttt{stacked\_signal}}
+
+Sums numerator and denominator at the galaxy level across every
+cluster, divides once, and multiplies by the joint boost factor:
+\begin{equation}
+\DS_{\rm stack}(R_b)
+\;=\;
+B_{\rm stack}(R_b)\,
+\frac{
+   \sum_c \sum_g \mathbb{1}_b(g)\, e_{t,g}\, w_g / \Sigma_{{\rm crit},g}
+}{
+   \sum_c \sum_g \mathbb{1}_b(g)\, (1 + M_g)\, w_g / \Sigma_{{\rm crit},g}^{\,2}
+},
+\quad
+B_{\rm stack}(R_b) = \frac{N_b^{\rm obs}}{N_b^{\rm random}}.
+\label{eq:stacked}
+\end{equation}
+Every source contributes once with its natural inverse-variance weight
+$w_g / \Sigma_{{\rm crit},g}^{\,2}$.
+
+\subsection{Per-cluster: \texttt{single\_cluster}}
+
+Performs a galaxy-level bootstrap inside one cluster's cone and returns
+the bootstrap mean of the boost-corrected $\DS$:
+\begin{equation}
+\widehat\DS_{c}(R_b)
+\;=\;
+\underset{i \in \mathrm{valid}}{\Ex}
+\left[\,
+  B_{c,b}^{(i)} \cdot
+  \frac{
+    \sum_g \mathbb{1}_b(g)\, e_{t,g_i}\, w_{g_i} / \Sigma_{{\rm crit},g_i}
+  }{
+    \sum_g \mathbb{1}_b(g)\, (1 + M_{g_i})\, w_{g_i} / \Sigma_{{\rm crit},g_i}^{\,2}
+  }
+\,\right],
+\label{eq:single}
+\end{equation}
+where $\{g_i\}$ is the $i$-th bootstrap resample of the cone's source
+indices, $B_{c,b}^{(i)} = N_{c,b}^{(i)} / \mathrm{RR}_{c,b}$ is its
+per-bin boost factor, and ``valid'' is the subset of iterations for
+which every bin contains at least one resampled source.
+
+The two estimators agree exactly in the limit of large per-bin source
+counts but split in the small-count regime, as shown next.
+
+
+\section{Simulated test: full WaZP-mirror catalogue}
+\label{sec:sim}
+
+The simulation uses \verb|destacking.simulation.generate_truth_catalog|
+and \verb|make_test_data| to produce a cluster catalogue with the same
+structure as the WaZP catalogue used by
+\verb|wazp_mass_richness_by_delta_m.ipynb|.  Specifically:
+\begin{itemize}
+\item \emph{Truth.}  Cluster redshifts uniform on $[0.10, 0.60)$,
+      halo masses from the Tinker-08 mass function restricted to
+      $\log_{10}(M_{\rm halo}/\Msun) \in [14.0, 15.0]$ (efficient
+      drawing into the $\Lambda$-cut survivor distribution),
+      \texttt{Zheng-07} HOD to assign satellite counts,
+      power-law luminosity function for satellite magnitudes,
+      Dutton--Maccio concentration with 0.1\,dex lognormal scatter.
+\item \emph{Magnitude gap.}  Computed per cluster from the brightest
+      satellite drawn from the satellite LF.
+\item \emph{Observable $\Lambda$.}  Inverted from the true mass via
+      McClintock+18 with Poisson scatter
+      (\verb|make_test_data(..., poisson_richness=True)|).
+\item \emph{Selection.}  $\Lambda > 25$, $\Delta m > 0$,
+      $0.10 \le z < 0.60$ -- the same selection
+      \verb|wazp_mass_richness_by_delta_m.ipynb| applies to
+      \verb|wazp_real_data.fits|.  We oversample truth in batches
+      until 15\,000 clusters survive the selection.
+\item \emph{Per-cluster shear.}  Each cluster gets an independent
+      metacal source catalogue from
+      \verb|xlensing.sims.make_simple_random_cat| at galaxy density
+      $\rho = 7.5\,\mathrm{gal}/\mathrm{arcmin}^{2}$ (matched to the
+      WaZP-filtered source density) with shape noise $\sigma_e = 0.27$
+      and $z_{\rm src} \in (0, 2.5)$.  The analytic NFW shear is
+      injected with
+      \verb|xlensing.sims.apply_NFW_shear_region| at the cluster's
+      true $(z, M, c)$.  The source catalogue is reduced with
+      \verb|metacal_cluster_lensing| inside a 5\,Mpc cone and the
+      per-cluster $\widehat\DS_c(R_b)$ comes from
+      \verb|xlensing.data.single_cluster| with
+      $N_{\rm boot} = 50$, on the same 8-bin radii grid
+      $\mathtt{np.logspace}(-0.8, 0.6, 8)$ as
+      \verb|wazp_lensing_signals.ipynb|.
+\item \emph{Stack assignment.}  Identical to
+      \verb|wazp_mass_richness_by_delta_m|: 3 redshift bins
+      $[0.10, 0.30, 0.50, 0.60]$, 4 richness bins
+      $[25, 50, 75, 100, \infty)$, and a per-cell-median $\Delta m$ split
+      into low/high halves $\Rightarrow$ 24 stacks.
+\item \emph{Per-stack diagnostic.}  Identical to §9 of
+      \verb|wazp_lensing_signals.ipynb|: per stack, take the
+      unweighted mean of per-cluster $\widehat\DS_c$ in the stack and
+      compare to the stacked $\DS$ from \verb|stacked_signal| run on
+      the same cluster's \verb|bkg| list.
+\end{itemize}
+
+\paragraph{Per-cluster source counts.}
+At $\rho = 7.5\,\mathrm{gal}/\mathrm{arcmin}^{2}$ in a 5\,Mpc cone at
+$z = 0.4$, the cone area is $\sim 765\,\mathrm{arcmin}^{2}$ and the
+unfiltered yield is $\sim 5\,700$ sources per cluster.  After the
+source-redshift cut $z_{\rm src} > 1.1\,z_{\rm lens} + 0.2$ enforced
+internally by \verb|metacal_cluster_lensing|, the surviving yield is
+$\sim 1\,300$ -- close to the $\sim 1\,500$ surviving WaZP sources per
+cone.  The per-bin innermost yield is
+$\langle N_{\rm inner}\rangle \approx 1\!-\!3$, matching the WaZP
+regime.
+
+\paragraph{Result.}
+Figure~\ref{fig:sim-vs-real}, left panel.  Per-stack residuals scatter
+around $\rho \approx 0$ within $\sim\pm 30\%$ at small $R$; no
+systematic dip to $-100\%$ in any of the 18 populated stacks.  Across
+the 15\,000 simulated clusters, the per-cluster $\widehat\DS_c$
+distribution at the innermost bin has median
+$\approx 150\,\Msun/\pc^{2}$, standard deviation $\approx 800$, and no
+values outside $\pm 5\,000$ -- a heavy-tailed but bounded distribution
+set by the per-galaxy shape noise of the few sources in the inner bin.
+
+
+\section{The same test on the WaZP data}
+\label{sec:data}
+
+Inputs: \verb|notebooks/data/wazp_lensing_signals.pkl| (per-cluster
+$\DS$ from \verb|single_cluster| on the WaZP $\Delta m > 0$ sample) and
+\verb|notebooks/data/wazp_mr_dm_stacks.pkl| (stacked $\DS$ from
+\verb|stacked_signal| on the same sample, binned per
+\verb|wazp_mass_richness_by_delta_m.ipynb|).  For each $(z, \lambda,
+\Delta m)$ stack we form the unweighted mean of the per-cluster
+profiles whose IDs belong to that stack and compare to the stacked
+profile interpolated in $\log_{10} R$ onto this notebook's 8-bin radii
+grid.
+
+\paragraph{Per-cluster source counts.}
+The WaZP cone is 5\,Mpc; the pre-filtered DES Y3 source density after
+the user's metacal redshift cut is $\sim 7\!-\!10$ gal/arcmin$^{2}$;
+the surviving source count per cone at $z \sim 0.4$ after the
+$z_s > 1.1\,z_l + 0.2$ cut is $\sim 1\,500$.  This puts the per-cluster
+innermost-bin yield at $\langle N_{\rm inner}\rangle \in [1, 3]$.
+
+\paragraph{Result.}
+Figure~\ref{fig:sim-vs-real}, right panel.  Per-stack residuals
+$\rho(R)$ are chaotic at small $R$, with several stacks plunging below
+$-50\%$ and some past $-100\%$, while the outer-$R$ behaviour is closer
+to zero.  The driver is exposed in Figure~\ref{fig:outliers}: across
+the 11\,360 WaZP clusters with finite inner-bin signal, the per-cluster
+$\widehat\DS_c$ distribution at $R = 0.158\,\Mpc$ has standard
+deviation $\approx 1.7\!\times\!10^{5}$ and a maximum
+$|\widehat\DS_c|$ of $\sim 1.4\!\times\!10^{7}$; $3.4\%$ of clusters
+report $|\widehat\DS_c| > 10^{4}$.  None of these extreme values
+appear in the simulation, whose maximum $|\widehat\DS_c|$ is
+$\approx 4\,900$.  A handful of these outliers per stack is enough to
+shift the unweighted mean by many standard deviations of the per-stack
+sample.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.98\linewidth]{../scripts/diagnose_outlier_histograms.png}
+\caption{Per-cluster $\widehat\DS_c(R=0.158\,\Mpc)$ histogram across
+the population.  \textbf{Left:} the simulation produces a tight,
+shape-noise-bounded distribution.  \textbf{Right:} the WaZP catalogue
+has heavy tails extending to $|\widehat\DS_c| \sim 10^{7}\,\Msun/\pc^{2}$
+in 3.4\% of clusters -- these outliers dominate the unweighted mean of
+Eq.~\eqref{eq:avg}.  The simulation receives the same single\_cluster
+machinery and the same per-cluster source count, so the difference is
+in the real catalogue, not in the estimator.}
+\label{fig:outliers}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=0.98\linewidth]{../scripts/full_wazp_sim_section9_plot.png}\\[1em]
+\includegraphics[width=0.98\linewidth]{../scripts/wazp_section9_replot.png}
+\caption{The §9 \texttt{wazp\_lensing\_signals.ipynb} diagnostic
+reproduced verbatim -- inverse-variance-weighted mean of per-cluster
+$\widehat\DS_c$ minus the stacked $\DS_{\rm stack}$, divided by
+$\DS_{\rm stack}$, in percent, with $y$-axis clipped to $\pm 50\%$,
+2 rows ($\Delta m$ halves) $\times$ 3 columns (z slices), four NGALS
+curves per panel.  \textbf{Top:} full WaZP-mirror simulation (15\,000
+selected truth clusters; Tinker-08 mass function, Zheng-07 HOD,
+$\rho = 7.5$ gal/arcmin$^2$, $\sigma_e = 0.27$, 5\,Mpc cone).
+\textbf{Bottom:} same code applied to the real WaZP catalogue.  The
+simulation residuals scatter inside $\sim\pm 20\%$ across every
+populated stack; the real-data residuals are chaotic and frequently
+hit the $\pm 50\%$ clip at small $R$.}
+\label{fig:sim-vs-real}
+\end{figure}
+
+
+\section{What is held the same and what differs}
+\label{sec:diff}
+
+The simulation is deliberately matched to the WaZP regime so the only
+remaining differences between the two diagnostics are properties of
+the real data, not of the test:
+
+\begin{description}
+\item[Matched.]
+\begin{itemize}
+\item Selection: $\Lambda > 25$, $\Delta m > 0$, $0.10 \le z < 0.60$.
+\item Mass function: \texttt{generate\_truth\_catalog} uses Tinker-08;
+      \texttt{wazp\_real\_data.fits} is the WaZP-detected catalogue,
+      which is selection-effective rather than mass-function-pure but
+      lives in the same mass range after the $\Lambda > 25$ cut.
+\item Concentration prescription: Dutton--Maccio with 0.1\,dex
+      lognormal scatter (sim) vs.\ whatever the real WaZP clusters
+      have (data); both samples cover the same $M$, $z$ range.
+\item Radial bins: $\mathtt{np.logspace}(-0.8, 0.6, 8)$ for the
+      per-cluster reduction; 18-bin grid from
+      \texttt{wazp\_mass\_richness\_by\_delta\_m} for the stack
+      (interpolated onto the 8-bin grid for the diagnostic).
+\item Source density: $\rho = 7.5\,\mathrm{gal}/\mathrm{arcmin}^{2}$
+      in both -- chosen to match the WaZP-filtered metacal density.
+\item Source-redshift cut: $z_{\rm src} > 1.1\,z_{\rm lens} + 0.2$
+      applied internally by \texttt{metacal\_cluster\_lensing}.
+\item Shape noise: $\sigma_e = 0.27$ per component.
+\item Per-cluster and stacked reductions: identical
+      \texttt{single\_cluster} ($N_{\rm boot}=50$) and
+      \texttt{stacked\_signal} calls on both sides.
+\item Stack assignment: 3 z × 4 NGALS × 2 per-cell-median $\Delta m$ = 24
+      stacks.
+\end{itemize}
+\item[Different.]
+\begin{itemize}
+\item \emph{Cluster-member contamination.}  The simulation injects a
+      pure shear field on a uniform source catalogue; the true boost is
+      $B \equiv 1$.  The real WaZP cones include cluster members in
+      the inner bins, so the real $B(R)$ rises above unity at small
+      $R$ and contributes its own scatter to the per-cluster
+      bootstrap.
+\item \emph{Source catalogue support.}  The sim uses a fresh,
+      independent metacal-like draw per cluster (Poisson-density
+      uniform in the cone), while the WaZP analysis cuts a cone out of
+      the single DES Y3 metacal catalogue with its real spatial
+      structure (large-scale structure, masking, edge effects).
+\end{itemize}
+\end{description}
+
+If the simulation \emph{reproduces} the §9 dip-to-$-100\%$ behaviour
+at small $R$, the cause is the per-cluster source-count regime, not
+real-data-specific contamination or LSS effects.  If the simulation
+does \emph{not} reproduce it, the failure is rooted in those
+real-data-specific effects.
+
+
+\section{Why \texttt{gamma\_scan} never surfaced this}
+\label{sec:gammascan}
+
+\verb|scripts/gamma_scan.py| reduces each simulated cluster with
+\verb|xlensing.data.signal| (the plain numerator-over-denominator
+routine, with no boost and no bootstrap) and feeds the per-cluster
+$\widehat\DS_c$ vectors directly into a \emph{joint} likelihood that
+fits the $\gamma$-of-interest across the population.  The cross-cluster
+object $\langle\DS\rangle_{\rm ind}$ of Eq.~\eqref{eq:avg} -- which
+\verb|wazp_lensing_signals.ipynb|'s §9 cell forms as a diagnostic --
+simply does not exist in the \verb|gamma_scan| pipeline.  The
+comparison test is new in \verb|wazp_lensing_signals.ipynb|;
+\verb|gamma_scan.py| could not have surfaced its failure mode.
+
+The current report's Section~\ref{sec:sim} simulation is itself
+already a stronger test than \verb|gamma_scan| would have been on this
+front, because it uses the WaZP-matched source density rather than
+\verb|gamma_scan|'s denser $\rho = 30\,\mathrm{gal}/\mathrm{arcmin}^{2}$.
+Even at the WaZP density the per-stack residuals are flat -- so the
+failure visible in the real data is not a property of the
+source-density regime alone.
+
+
+\section{Summary}
+
+The §9 diagnostic of \verb|wazp_lensing_signals.ipynb| collapses to
+$\rho(R) \to -100\%$ at small $R$ on the WaZP catalogue.  Running
+exactly the same diagnostic on a fully-matched simulation -- 15\,000
+truth clusters from a realistic mass function, HOD, magnitude-gap
+generator, the WaZP selection ($\Lambda > 25$, $\Delta m > 0$,
+$0.10 \le z < 0.60$), the WaZP-filtered source density
+($\rho = 7.5\,\mathrm{gal}/\mathrm{arcmin}^{2}$), the same shape
+noise, the same radial bins, the same stack definitions, and the same
+\verb|single_cluster| + \verb|stacked_signal| reductions -- recovers
+$\rho \approx 0$ within statistical noise.  The failure is therefore
+\emph{not} a property of the estimator pair at the WaZP source
+density.
+
+The proximate cause is exposed by Figure~\ref{fig:outliers}: the WaZP
+per-cluster $\widehat\DS_c$ values at the innermost radial bin have a
+heavy-tailed distribution with $3.4\%$ of clusters reporting
+$|\widehat\DS_c| > 10^{4}\,\Msun/\pc^{2}$ and a maximum of order
+$10^{7}\,\Msun/\pc^{2}$.  The unweighted mean of
+Eq.~\eqref{eq:avg} has no defence against such outliers; a handful of
+extreme contributors can swing the per-stack average across the entire
+plotted range.  None of these outliers are present in the simulation,
+which produces a tight, shape-noise-bounded
+$\widehat\DS_c$ distribution capped at
+$|\widehat\DS_c| \lesssim 5\,000$.
+
+Since the simulation and the data share the per-cluster source count,
+the radial layout, the selection, the shape-noise level, and the
+identical \verb|single_cluster| / \verb|stacked_signal| codepaths,
+the only ingredients that differ between the two diagnostics are:
+\begin{itemize}
+\item the presence of cluster-member contamination in real cones
+      (an inner-bin galaxy over-density that drives the true
+      $B(R) > 1$ but is absent in the uniform-source sim);
+\item the spatial support of the DES Y3 metacal catalogue
+      (large-scale structure, masking, edge effects);
+\item details of the WaZP cluster catalogue (e.g.\ photometric
+      misidentification at low signal-to-noise that does not occur in
+      the truth catalogue).
+\end{itemize}
+One of those mechanisms is producing the extreme per-cluster
+$\widehat\DS_c$ outliers in the real data.  Identifying which one is
+the next step.
+
+\subsection{Path forward}
+
+\begin{itemize}
+\item Audit the WaZP clusters with $|\widehat\DS_c(R_{\rm inner})|
+      > 10^{4}\,\Msun/\pc^{2}$ for shared catalogue properties
+      ($\Lambda$, $z_{\rm phot}$, BCG offset, edge-of-footprint, etc.)
+      to localise the cause.
+\item Inspect the per-cluster boost factor on those outliers: a
+      degenerate $\mathrm{RR}_b$ (random catalogue empty in the
+      innermost bin for a low-source-count cone) clamped to 1 inside
+      \verb|single_cluster| would amplify the boost from
+      $N_b / \mathrm{RR}_b$ to $N_b$ unboundedly.  Test by
+      either (i) lifting the floor (return NaN in that bin), or (ii)
+      bumping the random density so $\mathrm{RR}_b$ is well-sampled.
+\item Replace the §9 unweighted mean by a median or trimmed mean.
+      The median is already a much better summary at the inner bins
+      (median $\approx 120\,\Msun/\pc^{2}$ for the real WaZP, close to
+      the stacked value), and is unaffected by the outlier tail.
+      This is a one-line change in
+      \verb|wazp_lensing_signals.ipynb| §9.
+\end{itemize}
+
+\subsection{Scripts and artifacts}
+
+\begin{itemize}
+\item \verb|scripts/full_wazp_sim_avg_vs_stack.py| (the main result) --
+      full WaZP-mirror simulation; per-cluster $\widehat\DS$ via
+      \texttt{single\_cluster}, stacked $\DS$ via
+      \texttt{stacked\_signal}, on the 24 $(z, \lambda, \Delta m)$
+      stacks of \texttt{wazp\_mass\_richness\_by\_delta\_m}.  Produces
+      \verb|full_wazp_sim_avg_vs_stack.png| (Fig.~\ref{fig:sim-vs-real})
+      and \verb|full_wazp_sim_results.pkl| (15\,000 per-cluster
+      \texttt{single\_cluster} outputs).
+\item \verb|scripts/diagnose_outlier_histograms.py| -- side-by-side
+      histogram of per-cluster $\widehat\DS_c(R_{\rm inner})$ from the
+      sim and the real WaZP data, Fig.~\ref{fig:outliers}.
+\item \verb|scripts/diagnose_bias_vs_density.py| -- source-count sweep
+      $N_{\rm gal}/\mathrm{cluster} \in [500, 80\,000]$, kept here as
+      a reference of the per-cluster-bootstrap-variance regime
+      (\verb|diagnose_bias_vs_density.png|).
+\item \verb|scripts/diagnose_single_cluster_inner_bin_bias.py| -- early
+      walk-through with per-cluster top contributors, empirical-vs-
+      bootstrap variance comparison, and an estimator comparison
+      (inv-var, $N_{\rm inner}$-weighted, uniform, stack); kept for
+      context.
+\end{itemize}
+
+\end{document}

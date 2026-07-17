@@ -1,0 +1,578 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\DSigma}{\Delta\Sigma}
+\newcommand{\Msun}{\mathrm{M}_\odot}
+\newcommand{\dd}{\mathrm{d}}
+
+\title{Destacking individual cluster lensing profiles versus the CoMaLit
+programme:\\ a comparison of statistical strategies}
+\author{A.~Z.~Vitorelli \and Claude (Anthropic)}
+\date{July 15, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We compare two statistical programmes that address population-level galaxy
+cluster relations from weak-lensing data: the CoMaLit series of Sereno,
+Ettori and collaborators
+\cite{comalit1,comalit2,comalit3,comalit4,comalit5,comalit6}, which
+calibrates mass--observable scaling relations by Bayesian hierarchical
+regression of compressed (point-estimate) masses and proxies; and the
+\emph{destacking} approach developed in this repository, which fits a
+concentration--observable relation jointly to the individual, un-stacked
+excess surface density profiles of every cluster in the sample. The two
+programmes occupy opposite ends of the data-compression axis: CoMaLit pairs
+a maximal compression of the measurements with a fully stochastic population
+model, while destacking pairs a minimal compression with a (currently)
+deterministic population model. We show that the calibration failures
+measured in destacking simulations at DES-like source density are the
+profile-space manifestation of exactly the intrinsic-scatter effects that
+CoMaLit-I identified in scaling-relation space, and we derive the
+hierarchical extension of the destacking likelihood that imports the CoMaLit
+population layer. We also identify what CoMaLit-style analyses cannot
+recover at any price --- the concentration information residing in profile
+shapes --- and summarise validation practices that each programme could
+usefully adopt from the other.
+\end{abstract}
+
+\section{Introduction}
+
+Galaxy cluster masses are not observables. Every use of clusters in
+cosmology or structure-formation astrophysics therefore rests on relations
+between mass (or halo structure) and measurable proxies --- richness,
+Sunyaev--Zel'dovich (SZ) signal, X-ray luminosity, velocity dispersion,
+weak-lensing shear --- together with a statistical model of how individual
+clusters scatter about those relations and of how the sample was selected.
+
+The \textbf{CoMaLit} (Comparing Masses in Literature) series
+\cite{comalit1,comalit2,comalit3,comalit4,comalit5,comalit6} constitutes a
+systematic programme for this problem, built on Bayesian hierarchical linear
+regression in logarithmic variables, with latent true masses, intrinsic
+scatter on all axes, redshift evolution of both relation and scatter, and
+explicit treatment of Malmquist/Eddington selection effects. Its
+methodological engine is distributed as the LIRA package \cite{lira}.
+
+The \textbf{destacking} programme (this repository) approaches a sibling
+problem --- the dependence of halo concentration on a formation-time proxy,
+the magnitude gap $\Delta m$ between the brightest and second (or fourth)
+brightest cluster galaxies --- by refusing the compression step altogether:
+rather than reducing each cluster to a mass estimate, or stacking clusters
+into high signal-to-noise bins, it forward-models the noisy $\DSigma$
+profile of \emph{every individual cluster} and fits the relation parameters
+jointly across the sample. A prototype comparison found the joint fit of
+$500$ individual profiles delivered roughly twice tighter constraints on
+$(\log M, c)$ than stacking the same clusters.
+
+Sections~\ref{sec:comalit} and \ref{sec:destacking} state the two models in
+their own notation. Section~\ref{sec:comparison} compares the strategies
+dimension by dimension. Section~\ref{sec:lessons} derives what each can
+import from the other, including the hierarchical extension of the
+destacking likelihood suggested by the CoMaLit framework.
+
+\section{The CoMaLit statistical model}
+\label{sec:comalit}
+
+\subsection{Scope of the series}
+
+The six papers considered here contribute, in order: the demonstration that
+intrinsic scatter in mass \emph{estimates} biases scaling relations if
+ignored, with measured intrinsic scatters of ${\sim}15$ per cent for
+weak-lensing and ${\sim}25$ per cent for hydrostatic masses and up to
+${\sim}40$ per cent divergence between analyses of the same clusters by
+different groups (CoMaLit-I, \cite{comalit1}); the calibration of the
+Planck $Y_{500}$--$M_{500}$ relation and the operational distinction between
+\emph{symmetric} and \emph{conditional} scaling relations (CoMaLit-II,
+\cite{comalit2}); the standardized LC$^2$ literature catalogues of
+weak-lensing masses (CoMaLit-III, \cite{comalit3}); the general
+time-evolving hierarchical method with self-calibrated completeness
+(CoMaLit-IV, \cite{comalit4}); mass forecasting with masses of uncalibrated
+clusters treated as missing data (CoMaLit-V, \cite{comalit5}); and the
+measurement of intrinsic proxy scatter from \emph{stacked} weak lensing by
+modelling the occupancy dependence of the stacked scatter (CoMaLit-VI,
+\cite{comalit6}).
+
+\subsection{The regression model}
+\label{sec:lira}
+
+In the LIRA formulation \cite{lira,comalit4}, each cluster $i$ carries a
+latent covariate $Z_i$ (e.g.\ the true log-mass, suitably normalised). The
+latent proxy value $X_{Z,i}$ and latent response $Y_{Z,i}$ are linear in
+$Z_i$ with a redshift-evolution term,
+\begin{align}
+X_{Z,i} &= \alpha_{X|Z} + \beta_{X|Z} Z_i + \gamma_{X|Z}\, T(z_i),
+\label{eq:lira-x}\\
+Y_{Z,i} &= \alpha_{Y|Z} + \beta_{Y|Z} Z_i + \gamma_{Y|Z}\, T(z_i),
+\label{eq:lira-y}
+\end{align}
+where $T(z)$ is a chosen time function, e.g.\
+$T(z)=\log\!\left[(1+z)/(1+z_{\rm ref})\right]$ or the log ratio of Hubble
+parameters or distances. True values scatter about the latent relation with
+intrinsic dispersions that may themselves evolve,
+\begin{equation}
+X_i \sim \mathcal{N}\!\big(X_{Z,i},\, \sigma_{X|Z}^2(z_i)\big),
+\qquad
+Y_i \sim \mathcal{N}\!\big(Y_{Z,i},\, \sigma_{Y|Z}^2(z_i)\big),
+\label{eq:lira-scatter}
+\end{equation}
+and the observations add heteroscedastic, possibly correlated measurement
+errors,
+\begin{equation}
+\begin{pmatrix} x_i \\ y_i \end{pmatrix}
+\sim
+\mathcal{N}\!\left(
+\begin{pmatrix} X_i \\ Y_i \end{pmatrix},
+\begin{pmatrix}
+\delta_{x,i}^2 & \rho_i\,\delta_{x,i}\delta_{y,i}\\
+\rho_i\,\delta_{x,i}\delta_{y,i} & \delta_{y,i}^2
+\end{pmatrix}
+\right).
+\label{eq:lira-meas}
+\end{equation}
+The decisive ingredient is the prior on the latent population,
+\begin{equation}
+Z_i \sim \sum_k \pi_k\,
+\mathcal{N}\!\big(\mu_{Z,k}(z_i),\, \sigma_{Z,k}^2(z_i)\big),
+\label{eq:lira-pop}
+\end{equation}
+a (mixture of) Gaussian(s) whose mean and width may drift with redshift,
+which stands in for the mass function convolved with the selection.
+Selection on the response is modelled as truncation: if only objects with
+$y_i > y_{{\rm th},i}$ enter the sample, the likelihood of each observed
+object is renormalised by the detection probability,
+\begin{equation}
+p(y_i \mid Y_i) \;=\;
+\frac{\mathcal{N}\big(y_i;\, Y_i,\, \delta_{y,i}^2\big)\,
+\Theta(y_i - y_{{\rm th},i})}
+{\displaystyle \int_{y_{{\rm th},i}}^{\infty}
+\mathcal{N}\big(y';\, Y_i,\, \delta_{y,i}^2\big)\,\dd y'},
+\label{eq:lira-malmquist}
+\end{equation}
+with the threshold (completeness function) itself self-calibrated in
+CoMaLit-IV. Posterior sampling is by Gibbs (JAGS) since all conditionals
+are (truncated) Gaussians.
+
+Two consequences of this structure organise the whole series:
+
+\paragraph{Slope attenuation.} If intrinsic scatter and measurement errors
+on the covariate are ignored, the recovered slope is biased shallow by the
+classical attenuation factor,
+\begin{equation}
+\big\langle \hat\beta \big\rangle \;\simeq\;
+\beta \,
+\frac{\sigma_Z^2}{\sigma_Z^2 + \sigma_{X|Z}^2 + \delta_x^2},
+\label{eq:attenuation}
+\end{equation}
+and the apparent intrinsic scatter of the relation is correspondingly
+inflated --- the central quantitative point of CoMaLit-I.
+
+\paragraph{Symmetric versus conditional relations.} With scatter in the
+model, the ``symmetric'' relation (the underlying
+Eqs.~\ref{eq:lira-x}--\ref{eq:lira-y}) differs from the ``conditional''
+expectation $E[Y \mid x]$ appropriate for forecasting or number counts; for
+jointly Gaussian variables the conditional slope carries the same
+attenuation form as Eq.~(\ref{eq:attenuation}). CoMaLit-II measures both
+for the Planck clusters (finding, e.g., symmetric slopes $1.4$--$1.9$ but
+conditional slopes $1.1$--$1.6$ for $Y_{500}$--$M_{500}$), and CoMaLit-V
+builds mass forecasting on the conditional relation with unmeasured masses
+treated as missing data estimated jointly with the regression parameters.
+
+\paragraph{Stacked scatter rescaling.} CoMaLit-VI extends the framework to
+stacked lensing: for a bin containing $N_k$ clusters the intrinsic
+contribution to the scatter of the stacked signal is rescaled,
+\begin{equation}
+\sigma_{Y,{\rm stack},k}^2 \;\simeq\; \frac{\sigma_{Y|Z}^2}{N_k}
+\;+\; \delta_{y,{\rm stack},k}^2,
+\label{eq:comalit6}
+\end{equation}
+so that the \emph{individual} intrinsic scatter $\sigma_{Y|Z}$ remains
+identifiable from stacked measurements provided bins of different occupancy
+are available. Applied to AMICO clusters in KiDS-DR3, this yields richness
+as a low-scatter mass proxy and $\sim 20$ per cent mass forecasts down to
+$\sim 10^{13}\,\Msun$.
+
+\section{The destacking model}
+\label{sec:destacking}
+
+\subsection{Forward model}
+
+Destacking targets the concentration--magnitude-gap relation at fixed mass
+proxy. For cluster $i$ with richness $\lambda_i$, redshift $z_i$ and
+magnitude gap $\Delta m_i$, the model concentration is
+\begin{equation}
+\log_{10} c_i \;=\; \log_{10} c_0
+\;+\; \alpha\,\big(\log_{10} M_i - \log_{10} M_{\rm piv}\big)
+\;+\; \beta\,\log_{10}\!\frac{1+z_i}{1+z_{\rm ref}}
+\;+\; \gamma\,\log_{10}\!\frac{\Delta m_i}{\Delta m_{\rm ref}},
+\label{eq:crel}
+\end{equation}
+with the mass tied deterministically to richness through the McClintock
+et al.\ relation \cite{mcclintock19} plus a single global calibration
+offset,
+\begin{equation}
+\log_{10} M_i \;=\; \mu_{\rm MC}(\lambda_i, z_i) \;+\; \log_{10} M_{\rm norm}.
+\label{eq:mlambda}
+\end{equation}
+The predicted profile is the centred/miscentred one-halo NFW
+\cite{nfw97,wright00} excess surface density evaluated at the measured
+radii $R_b$,
+\begin{equation}
+m_{i,b}(\theta) \;=\;
+(1 - f_{{\rm mis},i})\,\DSigma_{\rm NFW}\big(R_b;\, M_i, c_i, z_i\big)
+\;+\; f_{{\rm mis},i}\,\DSigma_{\rm mis}\big(R_b;\, M_i, c_i, z_i,
+\sigma_{{\rm off},i}\big),
+\label{eq:model}
+\end{equation}
+with $\theta = (c_0, \alpha, \beta, \gamma, \log_{10} M_{\rm norm})$ and the
+two-halo term subtracted; a global amplitude correction $A$ is available in
+the code but pinned to $A=1$ (its effect was found negligible in $\gamma$
+scans).
+
+\subsection{Per-cluster measurement}
+
+Each cluster's data vector is the response-corrected metacalibration
+\cite{sheldon17} estimator of $\DSigma$ in radial bins,
+\begin{equation}
+\widehat{\DSigma}_{i,b} \;=\;
+\frac{\displaystyle\sum_{j \in b} w_j\, e_{t,j}\,\Sigma_{{\rm cr},j}^{-1}}
+{\displaystyle\sum_{j \in b} w_j\, R_{t,j}\, \Sigma_{{\rm cr},j}^{-2}},
+\label{eq:estimator}
+\end{equation}
+with $e_{t,j}$ the tangential ellipticity, $R_{t,j}$ the tangential
+response, $w_j$ the weight and $\Sigma_{{\rm cr},j}$ the critical surface
+density of source $j$. Both the data vector and its covariance
+$\mathsf{C}_i$ are estimated from the \emph{same} galaxy-level bootstrap
+(no boost correction, consistent with the boost-free model of
+Eq.~\ref{eq:model}); bins in which the bootstrap fails to return a finite,
+positive variance (too few sources) are masked per cluster.
+
+\subsection{Joint likelihood and combination}
+
+The relation parameters are constrained by the product of per-cluster
+Gaussians over the valid bins $V_i$,
+\begin{equation}
+\ln \mathcal{L}(\theta) \;=\;
+-\frac{1}{2}\sum_{i=1}^{N}
+\Big[
+\mathbf{r}_i^{\sf T} \mathsf{C}_i^{-1} \mathbf{r}_i
++ \ln\det \mathsf{C}_i
++ |V_i| \ln 2\pi
+\Big],
+\qquad
+\mathbf{r}_i = \big(\widehat{\DSigma}_{i,b} - m_{i,b}(\theta)\big)_{b\in V_i},
+\label{eq:jointlike}
+\end{equation}
+evaluated by Cholesky decomposition and sampled with the nautilus nested
+sampler \cite{nautilus} under Gaussian priors on $\theta$. Sampling
+robustness is addressed by cluster bootstrap: the sample of $N$ clusters is
+resampled with replacement $B$ times, the fit repeated per resample, and
+the quoted measurement is the equal-weight \emph{mixture} of the converged
+bootstrap posteriors,
+\begin{equation}
+\tilde p(\gamma \mid D) \;=\;
+\frac{1}{B_{\rm conv}} \sum_{b\,\in\,{\rm converged}} p_b(\gamma \mid D_b),
+\qquad
+\hat\gamma = \mathrm{median}\big[\tilde p\big],\quad
+\sigma_\gamma = \tfrac{1}{2}\big(\tilde p_{84} - \tilde p_{16}\big).
+\label{eq:mixture}
+\end{equation}
+The mixture width automatically combines the within-fit posterior width
+with the between-resample scatter,
+$\sigma_\gamma^2 \approx \sigma_{\rm within}^2 + \sigma_{\rm between}^2$,
+and therefore remains honest even where the individual posteriors are
+overconfident.
+
+\subsection{Validation results (July 2026)}
+\label{sec:validation}
+
+The pipeline is validated end-to-end on synthetic surveys: triaxial NFW
+shear injection with per-galaxy metacalibration responses, DES-Y3-like
+source redshift distributions, Poisson-sampled richness with a
+$\lambda > \lambda_{\rm th}$ selection, optional miscentering. A
+$2\times2$ test matrix ($\{$DES, LSST source density$\}\times\{$triaxial +
+miscentred, spherical + centred$\}$; $1500$ clusters; $50$ bootstrap fits
+each; $\gamma_{\rm true}=+0.2$) gave the results of
+Table~\ref{tab:matrix}. The pull is defined per bootstrap fit as
+$(\hat\gamma_b - \gamma_{\rm true})/\sigma_b$ with $\sigma_b$ the per-fit
+posterior half-width.
+
+\begin{table}
+\centering
+\caption{Destacking validation matrix (July 2026). $\sigma_e = 0.27$
+per component in all cells; densities in galaxies\,arcmin$^{-2}$.}
+\label{tab:matrix}
+\begin{tabular}{lcccc}
+\toprule
+ & DES (7.5), triax. & DES (7.5), spher. & LSST (40), triax. & LSST (40), spher.\\
+\midrule
+mean $\hat\gamma$ ($\gamma_{\rm true}=0.2$) & $+0.383\pm0.074$ & $+0.323\pm0.048$ & $+0.179\pm0.013$ & $+0.222\pm0.010$\\
+scatter / median $\sigma_b$ & 2.58 & 2.70 & 1.09 & 1.22\\
+pull RMS & 3.08 & 2.70 & 1.12 & 1.22\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At LSST density the method is essentially calibrated and unbiased, with
+$\sigma_\gamma \simeq 0.06$--$0.08$ from only $1500$ clusters. At DES
+density the per-fit posteriors are overconfident by a factor
+${\sim}2.6$--$2.7$ and the point estimates over-dispersed, with a
+${\sim}+0.14\pm0.04$ bias when the two DES cells are combined.
+
+\section{Strategy comparison}
+\label{sec:comparison}
+
+\subsection{The compression axis}
+
+Table~\ref{tab:compare} summarises the structural differences. The deepest
+one is where each programme places the stochasticity. CoMaLit treats the
+\emph{measurement} of each object as trivially summarised (a Gaussian with
+known width) and the \emph{population} as richly stochastic
+(Eqs.~\ref{eq:lira-scatter}--\ref{eq:lira-pop}). Destacking treats the
+measurement as rich --- the full profile with its bootstrap covariance,
+Eq.~(\ref{eq:jointlike}) --- and the population as deterministic: given
+$(\lambda_i, z_i, \Delta m_i)$ and $\theta$, the model profile of
+Eq.~(\ref{eq:model}) is a point, with no intrinsic scatter anywhere.
+
+\begin{table}
+\centering
+\caption{Structural comparison.}
+\label{tab:compare}
+\begin{tabular}{p{4.0cm}p{5.1cm}p{5.1cm}}
+\toprule
+ & CoMaLit & destacking\\
+\midrule
+input datum per cluster & point estimate + error & $\DSigma$ vector + covariance\\
+population model & latent $Z$, intrinsic scatter both axes, evolving (Eqs.~\ref{eq:lira-x}--\ref{eq:lira-pop}) & deterministic (Eqs.~\ref{eq:crel}--\ref{eq:model})\\
+selection effects & truncation + population prior, self-calibrated completeness (Eq.~\ref{eq:lira-malmquist}) & present in simulations, absent from likelihood\\
+target parameters & $\alpha, \beta$, evolution, $\sigma_{Y|Z}$ of mass--proxy relations & $\gamma$ (and $c_0,\alpha,\beta$) of the $c$--$\Delta m$ relation\\
+inference & Gibbs sampling (JAGS/LIRA) & nested sampling (nautilus), cluster bootstrap, posterior mixture (Eq.~\ref{eq:mixture})\\
+concentration information & integrated out at compression & the carrier of the signal\\
+validation & literature cross-comparison, regression consistency & end-to-end synthetic surveys with shared code paths\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The same disease in two spaces}
+
+The DES-density pathologies of Section~\ref{sec:validation} are the
+profile-space image of CoMaLit-I's central result. The destacking
+likelihood, Eq.~(\ref{eq:jointlike}), asserts that each cluster's residual
+is purely shape noise. In truth the residual also contains (i) the error of
+the deterministic mass map, Eq.~(\ref{eq:mlambda}), driven by the Poisson
+scatter of $\lambda$ at fixed $M$
+($\sigma_{\ln M} \simeq |\partial \mu_{\rm MC}/\partial\ln\lambda| /
+\sqrt{\lambda}$, i.e.\ $\sim 0.08$--$0.11$ dex at
+$\lambda \sim 30$--$60$); (ii) any intrinsic scatter of $c$ about
+Eq.~(\ref{eq:crel}); and (iii) profile scatter from orientation and
+centring not captured by the mean model. Omitting these terms makes each
+per-cluster likelihood too sharp; the joint posterior of $N$ such terms is
+too sharp by roughly the same factor, and the estimator is correspondingly
+over-dispersed --- pull RMS $\approx 3$ rather than $1$, exactly as
+measured. The attenuation mechanism of Eq.~(\ref{eq:attenuation}) also has
+a destacking analogue: scatter in the effective covariate
+($\log \Delta m$ leverage against noisy per-cluster masses) biases the
+recovered slope, and the sign and size of the measured DES-density bias
+($+0.14\pm0.04$) should be reproducible from this mechanism --- a
+quantitative check that has not yet been carried out.
+
+\subsection{Stacking, destacking, and CoMaLit-VI}
+
+CoMaLit-VI and destacking answer the same objection --- stacking erases
+population variance --- in opposite ways. CoMaLit-VI keeps stacks and
+recovers the individual intrinsic scatter through the occupancy scaling of
+Eq.~(\ref{eq:comalit6}); it stays in the linear-Gaussian world, at the cost
+of retaining binning choices and averaging away profile-shape information
+within each bin. Destacking keeps clusters and pays two prices measured in
+this repository: computational (each likelihood evaluation costs
+$\mathcal{O}(N)$ Cholesky solves; wall-time truncation of the sampler at
+$15000$ clusters produced collapsed posteriors until the budget was made
+configurable) and statistical (the joint likelihood is fragile exactly
+where per-cluster information is poor). The regime boundary is empirical:
+at LSST density destacking is calibrated and reaches
+$\sigma_\gamma\!\sim\!0.08$ with $1500$ clusters; at DES density its
+uncorrected form is neither calibrated nor unbiased.
+
+\subsection{What compression destroys}
+
+The clearest asymmetry: $\gamma$ in Eq.~(\ref{eq:crel}) is not accessible
+to CoMaLit-style regression of literature masses, because the
+concentration of an individual cluster does not survive compression into
+$\hat M$. The signal destacking targets lives in the systematic
+$\Delta m$-dependence of profile \emph{shapes} at fixed mass proxy. In the
+DES-density fits this is visible in the posteriors: $c_0, \alpha, \beta$
+return their priors while $\gamma$ (broad prior) carries all the data
+information --- the joint profile fit is, in effect, a measurement of
+$\gamma$ alone. Conversely, everything CoMaLit needs is already in its
+compressed inputs, and its linear-Gaussian structure buys exact
+conditionals, transparent selection corrections, and trivial computing ---
+none of which destacking currently enjoys.
+
+\section{Lessons in both directions}
+\label{sec:lessons}
+
+\subsection{Importing the CoMaLit population layer into destacking}
+
+The hierarchical completion of Eq.~(\ref{eq:jointlike}) follows the
+CoMaLit template. Promote each cluster's mass to a latent variable with a
+richness likelihood and a selection-truncated population prior, and give
+the concentration relation an intrinsic scatter:
+\begin{equation}
+\mathcal{L}(\theta, \sigma_{\ln c}) \;=\;
+\prod_{i=1}^{N} \int \dd M_i \int \dd c_i \;
+p\big(\widehat{\mathbf{D}}_i \,\big|\, m_i(M_i, c_i)\big)\;
+\mathcal{N}\big(\ln c_i;\, \ln c(M_i; \theta),\, \sigma_{\ln c}^2\big)\;
+\frac{P(\lambda_i \mid M_i)\; n(M_i, z_i)}
+{P(\lambda > \lambda_{\rm th} \mid z_i)},
+\label{eq:hierarchical}
+\end{equation}
+with $P(\lambda \mid M)$ Poisson or log-normal and $n(M, z)$ a mass
+function (or, following Eq.~\ref{eq:lira-pop}, an effective Gaussian
+mixture). A cheaper first step that captures most of the variance
+linearises the latent integrals into an additive model-error term in each
+covariance,
+\begin{equation}
+\mathsf{C}_i \;\rightarrow\;
+\mathsf{C}_i
++ \sigma_{\ln c}^2\, \mathbf{g}_i \mathbf{g}_i^{\sf T}
++ \sigma_{\ln M|\lambda}^2\, \mathbf{h}_i \mathbf{h}_i^{\sf T},
+\qquad
+\mathbf{g}_i = \frac{\partial \mathbf{m}_i}{\partial \ln c},\quad
+\mathbf{h}_i = \frac{\partial \mathbf{m}_i}{\partial \ln M},
+\label{eq:modelerror}
+\end{equation}
+which keeps Eq.~(\ref{eq:jointlike}) Gaussian and nearly free. Ranked by
+expected impact on the measured DES-density problems:
+\begin{enumerate}
+\item intrinsic and proxy scatter, via Eq.~(\ref{eq:modelerror}) first and
+Eq.~(\ref{eq:hierarchical}) eventually --- the direct cure for the
+$2.6\times$ overconfidence, and plausibly for part of the bias; broader
+per-cluster likelihoods should also soften the sampler-hostile geometry;
+\item selection truncation, the denominator of Eq.~(\ref{eq:hierarchical})
+--- the Eddington bias near $\lambda_{\rm th}$ is currently in the sample
+but not in the model;
+\item the symmetric/conditional distinction of CoMaLit-II when quoting
+$\gamma$ for a selected sample;
+\item CoMaLit-V missing-data treatment for clusters without measured
+$\Delta m$ (the current convention --- no $\gamma$ correction, i.e.\
+$\log(\Delta m/\Delta m_{\rm ref}) \equiv 0$ --- is a hidden informative
+choice);
+\item time-evolving scatter once items 1--2 exist.
+\end{enumerate}
+
+\subsection{Importing destacking practices into CoMaLit-style analyses}
+
+\begin{enumerate}
+\item \emph{Profile-level joint inference where depth allows.} At
+LSST-like density the compression to point masses is no longer forced;
+concentration and mass can be constrained jointly per cluster within one
+homogeneous model, removing the between-group heterogeneity that
+CoMaLit-I quantifies at up to $40$ per cent.
+\item \emph{End-to-end synthetic-survey validation with shared code
+paths.} The class of error exemplified by the metacalibration response
+mismatch found in this repository --- the simulation injected unit-response
+shear while the estimator of Eq.~(\ref{eq:estimator}) divided by
+$R_t \simeq 0.82$, inflating every profile by ${\sim}18$--$22$ per cent ---
+is invisible to regression-level consistency checks by construction, and
+was caught within hours by a zero-shape-noise single-cluster test against
+the forward model.
+\item \emph{The bootstrap posterior mixture}, Eq.~(\ref{eq:mixture}), as a
+cheap honesty device whenever there is reason to suspect a likelihood is
+too sharp: the mixture width carries the between-resample variance without
+any model extension.
+\end{enumerate}
+
+\section{Summary}
+
+CoMaLit and destacking are complementary solutions to the same class of
+problem, differing in where they spend their model complexity. CoMaLit's
+hierarchical population layer --- intrinsic scatter, latent variables,
+selection truncation --- is precisely what destacking's likelihood lacks,
+and the calibration failures measured in destacking simulations at
+DES-like density are the textbook symptoms (CoMaLit-I) of that lack.
+Destacking's profile-level forward model is precisely what CoMaLit's
+compressed inputs cannot express, and it is the only route to the
+concentration--magnitude-gap slope $\gamma$ that motivates the programme.
+Equation~(\ref{eq:hierarchical}) --- the destacking measurement model under
+the CoMaLit population model --- is strictly more expressive than either
+programme alone; its computational cost, against the already-demonstrated
+fragility of the plain joint likelihood at low per-cluster signal-to-noise,
+is the main open engineering question, and is most naturally answered in
+the LSST-like regime where the joint likelihood is demonstrably
+well-behaved.
+
+\begin{thebibliography}{99}
+
+\bibitem{comalit1}
+Sereno M., Ettori S., 2015, MNRAS, 450, 3633
+(CoMaLit-I: Bias and scatter in weak lensing and X-ray mass estimates of
+clusters), \href{https://arxiv.org/abs/1407.7868}{arXiv:1407.7868}
+
+\bibitem{comalit2}
+Sereno M., Ettori S., 2015, MNRAS, 450, 3649
+(CoMaLit-II: The scaling relation between mass and Sunyaev--Zel'dovich
+signal for Planck selected galaxy clusters),
+\href{https://arxiv.org/abs/1407.7869}{arXiv:1407.7869}
+
+\bibitem{comalit3}
+Sereno M., 2015, MNRAS, 450, 3665
+(CoMaLit-III: Literature catalogues of weak lensing clusters of galaxies,
+LC$^2$), \href{https://arxiv.org/abs/1409.5435}{arXiv:1409.5435}
+
+\bibitem{comalit4}
+Sereno M., Ettori S., 2015, MNRAS, 450, 3675
+(CoMaLit-IV: Evolution and self-similarity of scaling relations with the
+galaxy cluster mass),
+\href{https://arxiv.org/abs/1502.05413}{arXiv:1502.05413}
+
+\bibitem{comalit5}
+Sereno M., Ettori S., 2017, MNRAS
+(CoMaLit-V: Mass forecasting with proxies --- method and application to
+weak lensing calibrated samples),
+\href{https://arxiv.org/abs/1603.06581}{arXiv:1603.06581}
+
+\bibitem{comalit6}
+Sereno M., et al., 2020, MNRAS
+(CoMaLit-VI: Intrinsic scatter in stacked relations --- the weak lensing
+AMICO galaxy clusters in KiDS-DR3),
+\href{https://arxiv.org/abs/2006.16264}{arXiv:2006.16264}
+
+\bibitem{lira}
+Sereno M., 2016, MNRAS, 455, 2149
+(A Bayesian approach to linear regression in astronomy: the LIRA package),
+\href{https://arxiv.org/abs/1509.05778}{arXiv:1509.05778}
+
+\bibitem{nfw97}
+Navarro J.~F., Frenk C.~S., White S.~D.~M., 1997, ApJ, 490, 493
+
+\bibitem{wright00}
+Wright C.~O., Brainerd T.~G., 2000, ApJ, 534, 34
+
+\bibitem{mcclintock19}
+McClintock T., et al.\ (DES Collaboration), 2019, MNRAS, 482, 1352
+(Dark Energy Survey Year 1 results: weak lensing mass calibration of
+redMaPPer galaxy clusters),
+\href{https://arxiv.org/abs/1805.00039}{arXiv:1805.00039}
+
+\bibitem{sheldon17}
+Sheldon E.~S., Huff E.~M., 2017, ApJ, 841, 24
+(Practical weak-lensing shear measurement with metacalibration)
+
+\bibitem{nautilus}
+Lange J.~U., 2023, MNRAS, 525, 3181
+(nautilus: boosting Bayesian importance nested sampling with deep
+learning), \href{https://arxiv.org/abs/2306.16923}{arXiv:2306.16923}
+
+\bibitem{dutton14}
+Dutton A.~A., Macci\`o A.~V., 2014, MNRAS, 441, 3359
+(Cold dark matter haloes in the Planck era: evolution of structural
+parameters for Einasto and NFW profiles)
+
+\end{thebibliography}
+
+\end{document}

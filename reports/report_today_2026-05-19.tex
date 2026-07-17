@@ -1,0 +1,308 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage[authoryear]{natbib}
+\usepackage{geometry}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{caption}
+
+\geometry{margin=2.4cm}
+\captionsetup{font=small, labelfont=bf}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=blue!60!black,
+  urlcolor=blue!60!black,
+}
+
+\providecommand{\mnras}{MNRAS}
+\providecommand{\apj}{ApJ}
+
+\newcommand{\dsig}{\Delta\Sigma}
+\newcommand{\dm}{\Delta m}
+\newcommand{\fcen}{f_{\rm cen}}
+\newcommand{\sigmaoff}{\sigma_{\rm off}}
+\newcommand{\Rmin}{R_{\rm min,fit}}
+
+\title{\textbf{Day report: gamma-recovery scan and 20-realisation
+error-bar calibration}\\[0.3em]
+\large Activities of 19 May 2026}
+\author{Andr\'e Vitorelli}
+\date{19 May 2026}
+
+\begin{document}
+\maketitle
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Summary of today's work}
+%──────────────────────────────────────────────────────────────────────────────
+
+The day was spent in three intertwined directions:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Code reorganisation.}  Runnable scripts were consolidated into
+        a new \texttt{scripts/} folder; the DES~Y3 redshift-distribution
+        helpers were promoted from inline notebook code to functions in
+        \texttt{destacking.simulation}; the triaxiality machinery
+        (\texttt{sample\_triaxial\_shapes}) and a Poisson-density flag in
+        \texttt{make\_simple\_random\_cat} were added to
+        \texttt{xlensing.sims}; the lensing worker was rewritten so every
+        cluster draws its own random background catalogue.  All seeds in
+        every script and in the notebook are now derived from a single
+        \texttt{MASTER\_SEED} switch (default \texttt{None}, set to an
+        integer for a fully reproducible run).
+  \item \textbf{Bias fix.}  After tracing the
+        $\hat\gamma$ low bias to a misaligned $c_0$ prior, \emph{Fix~A} from
+        the previous bias report was applied to both the notebook and
+        \texttt{scripts/gamma\_scan.py}: $c_0 \sim \mathcal{N}(4.57, 0.05)$,
+        centred on $c_{\rm DM14}(M=10^{14}\,M_\odot, z=z_{\rm ref}=0.35) = 4.571$.
+  \item \textbf{Two large simulation runs.}  A 19-point $\gamma$ scan with
+        \texttt{scripts/gamma\_scan.py} and a 20-realisation
+        error-bar-calibration run with \texttt{scripts/gamma\_repeat.py}
+        produced the figures discussed below.
+\end{enumerate}
+
+Both scripts now also report a per-iteration wall time and a running ETA so
+long scans can be left unattended.
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Pipeline used for both runs}
+%──────────────────────────────────────────────────────────────────────────────
+
+Both runs share the same simulation/analysis configuration:
+
+\begin{itemize}[noitemsep]
+  \item Truth catalogue: DES~Y3-like cluster $n(z) \propto z^2$ on
+        $[0.2, 0.65]$, Tinker08 HMF in $\log_{10}M \in [13.5, 15]$,
+        HOD-driven magnitude gap with $\Delta m_{\rm ref} = 0.1$\,mag.
+  \item Triaxial shapes: \texttt{xlensing.sims.sample\_triaxial\_shapes} with
+        CDM-like axis ratios and isotropic LOS.
+  \item Miscentering simulation: $\fcen = 0.64$, Rayleigh scale
+        $\sigmaoff = 0.32\,h^{-1}\,\mathrm{Mpc}$.
+  \item Background: DES~Y3-like Smail--Schechter source $n(z)$
+        ($\alpha=2$, $\beta=1.5$, $z_0=0.4$), source density
+        $\sim 30\,\mathrm{gal\,arcmin}^{-2}$, fresh per-cluster catalogue with
+        Poisson density.
+  \item Inference: spherical-NFW forward model with fixed-parameter
+        uniform population miscentering ($\mathrm{FMISS} = 1-\fcen$,
+        $\sigmaoff$ as in the simulation) and the radial cut
+        $R \geq \Rmin = 0.5$\,Mpc.
+  \item Priors (after Fix~A):
+        $c_0 \sim \mathcal{N}(4.57, 0.05)$,
+        $\alpha \sim \mathcal{N}(-0.1, 0.05)$,
+        $\beta \sim \mathcal{N}(-0.4, 0.2)$,
+        $\gamma \sim \mathcal{N}(0, 1)$,
+        $\log M_{\rm norm} \sim \mathcal{N}(0, 0.1)$.
+  \item Sampler: \textsc{nautilus} with $n_{\rm live}=400$, parallelised
+        over 15 cores.
+\end{itemize}
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Run 1: $\gamma$ scan from $-0.5$ to $+0.5$}
+%──────────────────────────────────────────────────────────────────────────────
+
+\texttt{scripts/gamma\_scan.py} was run with 20 evenly spaced
+$\gamma_{\rm true}$ values from $-0.5$ to $+0.5$ at $N_{\rm cluster}=5000$
+per gamma.  Nineteen runs completed (the $\gamma_{\rm true}=+0.395$ run was
+skipped); the cached per-gamma JSON summaries live in
+\texttt{scripts/gamma\_scan\_outputs/run\_2026-05-19T16-12-56/}.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.78\textwidth]{scripts/gamma_scan_outputs/run_2026-05-19T16-12-56/gamma_recovered_vs_true.png}
+  \caption{Recovered $\hat\gamma$ vs $\gamma_{\rm true}$ for 19 runs of the
+  gamma scan after Fix~A (\textsf{steelblue}, with 68\% credible interval as
+  vertical bars).  The dashed black line is the identity $\hat\gamma =
+  \gamma_{\rm true}$.}
+  \label{fig:scan_recovery}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.78\textwidth]{scripts/gamma_scan_outputs/run_2026-05-19T16-12-56/gamma_residuals.png}
+  \caption{Residuals $\hat\gamma - \gamma_{\rm true}$ across the same 19
+  gammas.  Several points sit many posterior $\sigma$ above or below the
+  identity, despite being run on independent realisations of the same
+  pipeline.}
+  \label{fig:scan_residuals}
+\end{figure}
+
+\paragraph{Statistics across the scan.}  Across the 19 successful runs we
+find
+\begin{equation}
+  \langle\hat\gamma - \gamma_{\rm true}\rangle = +0.144,\quad
+  \mathrm{std}(\hat\gamma - \gamma_{\rm true}) = 0.384,\quad
+  \langle\sigma_\gamma^{\rm post}\rangle = 0.151.
+  \label{eq:scan_stats}
+\end{equation}
+The mean residual is small (the constant low bias diagnosed before Fix~A is
+gone), but the run-to-run scatter is more than $2\times$ the average
+posterior $\sigma$.  Several runs report $4$–$11\,\sigma$ apparent biases
+even though the inference is internally well-behaved.  These outliers are
+not isolated bugs: they are a direct symptom of the error-bar calibration
+issue confirmed by Run~2.
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Run 2: 20 realisations at $\gamma_{\rm true} = 0.2$}
+%──────────────────────────────────────────────────────────────────────────────
+
+\texttt{scripts/gamma\_repeat.py} was run with \texttt{TRUE\_GAMMA = 0.2},
+\texttt{MASTER\_SEED = None} (fresh OS entropy at every RNG), and 20
+realisations of the full pipeline.  Outputs live in
+\texttt{scripts/gamma\_repeat\_outputs/run\_2026-05-19T18-15-45/}.  Each
+realisation produced its own corner, $M$–$c$ recovery, $\gamma$ marginal,
+truth-distribution, triaxiality-diagnostic, etc.\ plots; the two aggregate
+plots are reproduced below.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\textwidth]{scripts/gamma_repeat_outputs/run_2026-05-19T18-15-45/gamma_residuals.png}
+  \caption{Per-realisation $\hat\gamma_k - \gamma_{\rm true}$ for the 20
+  realisations.  Error bars are the 68\% posterior credible intervals;
+  the dashed black line is $\hat\gamma = \gamma_{\rm true}$.  The
+  \textsf{tomato} band is the empirical $\sigma_{\rm runs}$ of the
+  medians.}
+  \label{fig:repeat_residuals}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\textwidth]{scripts/gamma_repeat_outputs/run_2026-05-19T18-15-45/posteriors_overlay.png}
+  \caption{KDE overlay of all 20 marginal $\gamma$ posteriors (viridis,
+  one curve per realisation) against the truth $\gamma_{\rm true} = 0.2$
+  (\textsf{crimson} dashed) and the $\mathcal{N}(0, 1)$ prior
+  (\textsf{darkorange} dashed).}
+  \label{fig:repeat_overlay}
+\end{figure}
+
+\paragraph{Calibration result.}  The 20 realisations give
+\begin{equation}
+  \mathrm{mean}(\hat\gamma) = 0.196,\qquad
+  \mathrm{std}(\hat\gamma_k) = \sigma_{\rm runs} = 0.399,\qquad
+  \langle\sigma_\gamma^{\rm post}\rangle = 0.159.
+\end{equation}
+The recovery is \emph{unbiased on average} ($\mathrm{mean}(\hat\gamma -
+\gamma_{\rm true}) = -0.004$, well inside any individual posterior $\sigma$),
+which confirms that Fix~A successfully removed the low bias from the
+misaligned $c_0$ prior.
+
+The calibration ratio, however, is
+\begin{equation}
+  \boxed{\;\frac{\sigma_{\rm runs}}{\langle\sigma_\gamma^{\rm post}\rangle}
+        = \frac{0.399}{0.159} = 2.51\;}
+  \label{eq:cal_ratio}
+\end{equation}
+where a perfectly calibrated posterior would give a ratio of $1$.  This is
+the headline result of the day: the per-realisation posterior credible
+intervals \textbf{under-estimate the true scatter by a factor of about
+2.5}.
+
+\paragraph{Why this matches Run~1.}  The factor-2.5 mismatch in Run~2 is
+the same as the apparent ``many-$\sigma$ biases'' seen in Run~1.  Each
+gamma in the scan is a single realisation, so it has a scatter of
+$\sim 0.4$ around the truth (Run~2 calibration); but its quoted posterior
+$\sigma$ is $\sim 0.15$, giving the deceptive impression of a $\sim 2.7\sigma$
+bias for typical realisations.  Outliers ($4$–$11\sigma$) are just the
+expected tails of this under-coverage.
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Interpretation: what the factor-2.5 ratio tells us}
+%──────────────────────────────────────────────────────────────────────────────
+
+A run-to-run scatter that exceeds the per-run posterior $\sigma$ by a factor
+$\sim 2.5$ means the joint Gaussian likelihood used by the analysis is
+\emph{too narrow} given the variance in the data-generating process.  The
+likely culprits, in approximate order of expected magnitude:
+
+\begin{itemize}[noitemsep]
+  \item \textit{Triaxiality scatter in the inner profile.}  The radial cut
+        $R \geq 0.5$\,Mpc was tuned to suppress the \emph{bias} from the
+        spherical/triaxial mismatch, but the per-cluster amplitude
+        \emph{scatter} from random axis ratios and LOS orientations is not
+        modelled in the covariance.  This scatter is significant (10--30\%
+        of $\dsig$ at intermediate $R$) and propagates directly into a
+        wider $\gamma$ posterior than the formal shape-noise-only
+        likelihood predicts.
+  \item \textit{Per-cluster miscentering realisation.}  The forward model
+        uses the population-level Rayleigh miscentering correction; the
+        truth has a specific offset per cluster.  The leftover per-cluster
+        mismatch acts as additional scatter not absorbed by the
+        shape-noise covariance.
+  \item \textit{Background-catalogue variance.}  The per-cluster background
+        catalogue is now an independent draw with Poisson density; the
+        shape-noise diagonal covariance assumes a smooth $\bar n$ and so
+        underestimates the per-cluster variance.
+\end{itemize}
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Concrete next steps suggested by the figures}
+%──────────────────────────────────────────────────────────────────────────────
+
+\begin{enumerate}[noitemsep]
+  \item Re-introduce a controlled covariance-inflation parameter
+        $f_{\rm intrinsic}$ (this was tried as a global free parameter and
+        rolled back earlier in the project, but at the time the bias from
+        the misaligned $c_0$ prior dominated and obscured the calibration
+        improvement; now that Fix~A removes that bias, $f_{\rm intrinsic}$
+        should be retried as a \emph{fixed} value calibrated against
+        \texttt{gamma\_repeat.py}'s ratio of 2.5).
+  \item Use the per-cluster triaxiality residuals computed by the existing
+        \texttt{triaxiality\_diagnostic.png} plot to fit a parametric
+        $\sigma_{\rm tri}(R)$ model and add it on the diagonal of every
+        $\mathbf{C}_i$.
+  \item Bin a subset of clusters by $\Delta m$ and check whether the run-to-run
+        scatter scales as $1/\sqrt{N}$; this would discriminate between
+        per-cluster scatter (no improvement with $N$) and shot noise
+        (improvement with $N$).
+  \item Repeat \texttt{gamma\_repeat.py} at $N=10\,000$ and $N=20\,000$ to
+        confirm that the $\sigma_{\rm runs}/\langle\sigma^{\rm post}\rangle$
+        ratio stays near $2.5$ rather than drifting toward unity --- a sign
+        that the missing variance is structural, not statistical.
+\end{enumerate}
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Code commits of the day}
+%──────────────────────────────────────────────────────────────────────────────
+
+\begin{footnotesize}
+\begin{tabular}{ll}
+\toprule
+hash & subject \\
+\midrule
+\texttt{5e4dc93} & Use \texttt{sample\_triaxial\_shapes}; per-cluster Poisson background catalogue \\
+\texttt{1ed3037} & \texttt{gamma\_scan.py}: import DES Y3 helpers from \texttt{destacking.simulation} \\
+\texttt{604ff57} & \texttt{gamma\_scan.py}: timestamped per-run output directory \\
+\texttt{5bfad46} & Consolidate runnable scripts into \texttt{scripts/} \\
+\texttt{d34280c} & Fix~A: recentre $c_0$ prior on DM14 truth in \texttt{scripts/gamma\_scan.py} \\
+\texttt{5580bc0} & Align unbiased notebook with \texttt{scripts/gamma\_scan.py} (single-$\gamma$ run) \\
+\texttt{8814a18} & Centralised seeds and \texttt{N\_CLUSTERS} back to 5000 \\
+\texttt{dfea769} & Add \texttt{scripts/gamma\_repeat.py}: 20-realisation $\gamma$ error-bar calibration \\
+\texttt{a3ac7c6} & \texttt{gamma\_scan.py}: centralised seeds with default \texttt{MASTER\_SEED = None} \\
+\texttt{1d6c2e3} & \texttt{gamma\_scan} / \texttt{gamma\_repeat}: per-iteration timer with running ETA \\
+\bottomrule
+\end{tabular}
+\end{footnotesize}
+
+Both branches \texttt{claude} and \texttt{develop} were kept in sync on every
+push.
+
+%──────────────────────────────────────────────────────────────────────────────
+\section*{Conclusions}
+%──────────────────────────────────────────────────────────────────────────────
+
+Fix~A removes the misaligned-$c_0$-prior bias: the mean of the recovered
+$\hat\gamma$ across 20 independent realisations of the same noise realisation
+matches the truth $\gamma_{\rm true} = 0.2$ to better than $0.005$.  The
+posterior credible intervals are however \emph{too narrow} by a factor of
+$\sim 2.5$, which is the single biggest remaining issue in the inference and
+the natural target of the next round of work.
+
+\end{document}

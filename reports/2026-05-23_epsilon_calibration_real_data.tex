@@ -1,0 +1,121 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{colorlinks=true,linkcolor=blue}
+
+\title{\textbf{Note: Determining the Coherent Scatter Amplitude $\varepsilon$\\
+from Real Data}\\[0.4em]
+\large \texttt{coh\_amplitude} calibration beyond simulations}
+\author{destacking project}
+\date{2026 May 23}
+
+\begin{document}
+\maketitle
+
+\section*{Context}
+
+The rank-1 covariance inflation scheme adds a term
+$\varepsilon^2\,\mathbf{m}_i\mathbf{m}_i^\top$ to each cluster's covariance
+matrix to absorb coherent per-cluster amplitude scatter from triaxiality and
+miscentering.  The calibration scan approach finds the value of $\varepsilon$
+that makes the posterior width match the run-to-run scatter of the estimator
+in simulations.  The question is: \emph{how would we determine $\varepsilon$
+when we only have one realisation of the real data?}
+
+\section{The problem}
+
+In simulations we have access to many independent realisations of the survey,
+so we can measure $\sigma_{\rm runs}$ directly.  In real data we have one
+survey, one cluster sample, and an unknown true $\gamma$.  The simulation-based
+calibration ratio $\sigma_{\rm runs}/\langle\sigma_{\rm post}\rangle$ cannot be
+computed.
+
+\section{Available approaches}
+
+\subsection{Simulation-based transfer}
+Tune $\varepsilon$ in simulations that match the real survey (cluster
+redshift and richness distributions, source $n(z)$, shape noise).  If the
+simulations faithfully reproduce the physical sources of coherent scatter —
+triaxiality distribution, miscentering distribution — then the calibrated
+$\varepsilon$ transfers to the real data.
+
+\textbf{Risk:} if the real coherent scatter amplitude differs from what the
+simulations inject, $\varepsilon$ will be wrong and error bars will be
+miscalibrated.  Validation requires an independent check (e.g.\
+cross-validation or comparison with external miscentering/triaxiality
+measurements).
+
+\subsection{Joint inference: treat $\varepsilon$ as a nuisance parameter}
+Add $\varepsilon$ to the sampler's parameter space and infer it jointly with
+$\gamma$, marginalising the posterior over $\varepsilon$ with a physically
+motivated prior.
+
+\textbf{Risk:} requires the likelihood to genuinely constrain $\varepsilon$
+from the data.  With the current rank-1 parameterisation this is dangerous:
+the scan has shown that the likelihood develops pathological modes at
+$\varepsilon \gtrsim 0.2$.  This approach should not be attempted until the
+spurious $\hat\gamma \approx +1.4$ mode is understood and eliminated.
+
+\subsection{Empirical two-step variance estimation}
+Measure the coherent amplitude variance directly from the data without
+involving $\gamma$:
+\begin{enumerate}
+  \item Fit a mean NFW profile to the stacked cluster sample.
+  \item For each cluster, measure the residual amplitude relative to
+        the mean profile.
+  \item The component of that residual scatter correlated with the model
+        direction $\mathbf{m}_i$ gives $\varepsilon$ independently of $\gamma$.
+\end{enumerate}
+This decouples noise-model estimation from the scientific inference.
+
+\textbf{Risk:} the amplitude scatter measured from noisy individual profiles
+will be upward-biased; a noise-bias correction is required.  Also requires
+that the mean profile is a good reference, which it may not be if the sample
+has a broad mass/redshift range.
+
+\subsection{Physical priors from external constraints}
+Predict $\varepsilon$ from independent measurements rather than fitting it
+from lensing data at all:
+\begin{itemize}
+  \item Triaxiality: halo shape distributions from N-body simulations
+        (e.g.\ Jing \& Suto 2002, Allgood et al.\ 2006).
+  \item Miscentering: BCG offset or X-ray centroid distributions from
+        optical/X-ray data (e.g.\ Johnston et al.\ 2007, Zhang et al.\ 2019).
+\end{itemize}
+Both effects predict a coherent amplitude scatter of order $10$--$20\%$ per
+cluster; translated to the model-direction variance, this gives a physically
+grounded prior or fixed value for $\varepsilon$.
+
+\textbf{Risk:} the coherent scatter in real data is not purely along the
+model direction, so any single $\varepsilon$ is an approximation regardless
+of how well the physical inputs are known.
+
+\section{Recommendation and priority ordering}
+
+\begin{center}
+\begin{tabular}{r l l}
+\toprule
+Priority & Approach & Prerequisite \\
+\midrule
+1 & Fix the spurious $\hat\gamma \approx +1.4$ mode & (current blocker) \\
+2 & Physical priors from N-body + miscentering data & none \\
+3 & Simulation-based transfer & fix (1) \\
+4 & Empirical two-step & fix (1), noise-bias correction \\
+5 & Joint inference over $\varepsilon$ & fix (1), validate no new modes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+In practice the community typically combines approaches (2) and (3): simulations
+are tuned to known physical scatter sources and validated where possible against
+the data.  The key message is that if the simulations do not match the real
+coherent scatter amplitude, the calibrated $\varepsilon$ will be wrong
+regardless of how well the scan is performed — which makes fixing the
+pathological mode a prerequisite for any of these approaches to be trustworthy.
+
+\end{document}

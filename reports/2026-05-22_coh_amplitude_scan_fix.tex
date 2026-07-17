@@ -1,0 +1,172 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{parskip}
+
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{codeframe}{RGB}{200,200,200}
+\lstset{
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+}
+
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue}
+
+\title{\textbf{Bug Fix Report: Rank-1 Covariance Inflation}\\[0.4em]
+       \large Catastrophic Cancellation in the Sherman--Morrison Quadratic Form}
+\author{destacking / \texttt{fitting.py}}
+\date{2026 May 22}
+
+\begin{document}
+\maketitle
+
+\section*{Summary}
+
+All scan results for \texttt{coh\_amplitude}~$>0$ were invalid due to
+catastrophic floating-point cancellation in the Sherman--Morrison
+quadratic-form update inside \texttt{cholog\_gaussian}
+(\texttt{destacking/fitting.py}).
+After fixing the numerics, the first confirmed result
+(\texttt{amp=0.1}, realisation~000) recovers
+$\hat\gamma = +0.081$ against the injected truth $\gamma_\mathrm{true}=0.200$,
+which is consistent within noise.
+The calibration scan is now running with the corrected code.
+
+\section{The Bug}
+
+\subsection{Sherman--Morrison likelihood update}
+
+The rank-1-inflated covariance per cluster is
+$\mathbf{C}_i^{\rm eff} = \mathbf{C}_i + \mathbf{u}_i\mathbf{u}_i^\top$,
+where $\mathbf{u}_i = \epsilon\,\mathbf{m}_i$ (\texttt{coh\_amplitude}
+$\times$ model vector).
+Using the matrix determinant lemma and Woodbury identity, the
+log-likelihood contribution becomes
+\begin{equation}
+    \ln\mathcal{L}_i \propto
+    -\tfrac{1}{2}\left[\mathbf{y}_i^\top\mathbf{y}_i
+    - \frac{(\mathbf{y}_i^\top\mathbf{w}_i)^2}{1+\mathbf{w}_i^\top\mathbf{w}_i}
+    \right]
+    - \tfrac{1}{2}\ln(1+\mathbf{w}_i^\top\mathbf{w}_i),
+\end{equation}
+where $\mathbf{y}_i = \mathbf{L}_i^{-1}(\mathbf{d}_i - \mathbf{m}_i)$ and
+$\mathbf{w}_i = \mathbf{L}_i^{-1}\mathbf{u}_i$.
+The old code implemented this directly:
+
+\begin{lstlisting}[language=Python]
+cross     = float(np.dot(y, w))
+quad_form = quad_form - cross * cross / denom   # catastrophic cancellation
+log_det   = log_det + np.log(denom)
+\end{lstlisting}
+
+\subsection{Root cause: catastrophic cancellation}
+
+When the model amplitude is large, both $\mathbf{y}\cdot\mathbf{y}$ and
+$(\mathbf{y}\cdot\mathbf{w})^2/\mathrm{denom}$ can reach $\sim10^{196}$ in
+double precision.
+Their difference underflows to a \emph{negative} value, making
+$\mathrm{quad\_form}<0$ and the log-likelihood spuriously huge
+($\ln\mathcal{L}\sim+3.5\times10^{72}$).
+
+\subsection{Why extreme model amplitudes arise}
+
+The concentration--magnitude-gap relation is
+\begin{equation}
+    c_{200} \propto \left(\frac{\Delta m}{\Delta m_\mathrm{ref}}\right)^{\!\gamma}.
+\end{equation}
+In \texttt{gamma\_repeat.py} the reference gap is set to
+$\Delta m_\mathrm{ref}=0.1$\,mag, yet $\approx20\%$ of simulated clusters
+have $\Delta m < 0.1$.
+At $\gamma\approx-11$ a cluster with $\Delta m=0.05$ acquires
+$c_{200}\sim10^{24}$, producing a model $\Delta\Sigma$ profile with
+amplitudes comparable to $10^{196}$ in internal units.
+
+\subsection{Sampler behaviour}
+
+Nautilus located the fake global maximum at $\gamma\approx-11$ within a few
+hundred likelihood calls.
+The posterior collapsed to two live points each with weight~0.5; all other
+$\sim$42\,000 samples had weight~$\approx0$.
+Every realisation and every amplitude $\epsilon>0$ returned
+$\hat\gamma\approx-9$ to $-12$ with $\sigma_\gamma\approx10^{-8}$.
+
+\section{The Fix}
+
+The subtraction-based formula is replaced by an algebraically equivalent
+projection formula that is guaranteed non-negative:
+\begin{equation}
+    \mathbf{y}^\top\mathbf{y}
+    - \frac{(\mathbf{y}\cdot\mathbf{w})^2}{1+\|\mathbf{w}\|^2}
+    \;=\;
+    \frac{(\mathbf{y}\cdot\hat{\mathbf{w}})^2}{1+\|\mathbf{w}\|^2}
+    + \|\mathbf{y}_\perp\|^2,
+\end{equation}
+where $\hat{\mathbf{w}}=\mathbf{w}/\|\mathbf{w}\|$ and
+$\mathbf{y}_\perp = \mathbf{y} - (\mathbf{y}\cdot\hat{\mathbf{w}})\hat{\mathbf{w}}$.
+Both terms are computed as dot products of well-scaled vectors; no large-number
+subtraction occurs.
+
+The corrected code:
+
+\begin{lstlisting}[language=Python]
+log_det = log_det + np.log(denom)
+if uCu > 0.0:
+    w_unit   = w / np.sqrt(uCu)
+    y_dot_wu = float(np.dot(y, w_unit))
+    y_perp   = y - y_dot_wu * w_unit
+    quad_form = (y_dot_wu**2 / denom
+                 + float(np.dot(y_perp, y_perp)))
+\end{lstlisting}
+
+\subsection*{Verification}
+
+With \texttt{coh\_amplitude=0.1} and $\gamma=-11$ the log-likelihood
+evaluates to $\ln\mathcal{L}\approx-3.4\times10^{63}$ after the fix
+(strongly negative, as expected for an unphysical parameter value).
+All 123 unit tests pass.
+
+\section{Scan Status}
+
+The scan resumes from
+\texttt{scripts/coh\_tuning\_outputs/run\_2026-05-21T10-17-02}.
+The \texttt{amp=0.000} realisations are loaded from cache (the bug does not
+affect $\epsilon=0$ since the rank-1 branch is never entered).
+All other amplitudes are computed fresh with the corrected code.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Amplitude & Status & First result \\
+\midrule
+0.000 & 10/10 cached (unaffected) & --- \\
+0.100 & Running & $\hat\gamma=+0.081\;[-0.071,\,+0.218]$,\;$\sigma=0.144$ \\
+0.200--0.600 & Queued & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The first live result ($\hat\gamma=+0.081$) is within $0.8\sigma$ of the
+injected truth ($\gamma=0.200$), confirming the fix.
+The full run-to-run calibration ratio will be available once all
+$10\times6=60$ realisations complete (estimated wall time $\sim$3--4\,h).
+
+\section*{Files Changed}
+
+\begin{itemize}
+    \item \texttt{destacking/fitting.py}, lines 74--93 —
+          numerically stable Sherman--Morrison quadratic form.
+    \item \texttt{scripts/coh\_tuning\_outputs/run\_2026-05-21T10-17-02/amp\_0.100/}
+          through \texttt{amp\_0.600/} — invalid cached results deleted before re-run.
+\end{itemize}
+
+\end{document}

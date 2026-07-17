@@ -1,0 +1,650 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{graphicx}
+
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue}
+
+\title{\textbf{Bootstrap Calibration of the Destacking Pipeline}\\[0.4em]
+\large Calibration study --- destacking project}
+\author{destacking project}
+\date{2026 May 24}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Overview}
+% ============================================================
+
+The destacking pipeline constrains a magnitude-gap slope $\gamma$ by jointly
+fitting $N = 5000$ per-cluster weak-lensing excess surface density ($\Delta\Sigma$)
+profiles measured from simulated weak-lensing data.  Individual posterior
+distributions on $\gamma$ are known to be \emph{under-dispersed}: they correctly
+capture shape-noise (measurement) uncertainty but miss cluster sample variance ---
+the run-to-run variation in $\hat\gamma$ arising because the 5000-cluster dataset
+is one random draw from a larger cluster population.
+
+The goal of this study is to verify that a \emph{post-hoc bootstrap} procedure
+provides an honest, well-calibrated uncertainty estimate for $\gamma$.  Rather
+than re-generating new simulated data, the bootstrap repeats the full analysis on
+resampled versions of the \emph{same} fixed dataset.  The study is structured as
+two nested levels: $K = 10$ independent outer simulations (each a fresh 5000-cluster
+survey), and $B = 10$ bootstrap draws per simulation.  Calibration is assessed by
+comparing the scatter of ensemble median estimates across simulations,
+$\mathrm{std}_k(\hat\gamma_\mathrm{ens}^{(k)})$, against the average bootstrap
+standard deviation, $\mathrm{mean}_k(\sigma_\mathrm{boot}^{(k)})$.  A ratio close
+to unity indicates that the bootstrap uncertainty correctly tracks the true
+survey-level uncertainty.
+
+% ============================================================
+\section{Simulation Pipeline}
+% ============================================================
+
+This section describes every step required to reproduce the simulated datasets.
+
+\subsection{Truth catalog}
+\label{sec:truth}
+
+A pool of $N_\mathrm{pool} = 5 \times N = 25{,}000$ candidate clusters is generated
+as follows.
+
+\begin{enumerate}
+  \item \textbf{Redshift.}  Draw $z \sim \mathrm{Uniform}[0.2,\,0.65]$.
+        These redshifts are used as an initial sample and subsequently reweighted
+        (see below).
+
+  \item \textbf{Halo mass.}  Draw $\log_{10}(M_{200}/M_\odot)$ from the
+        Tinker et al.\ (2008) halo mass function in the range
+        $\log_{10}(M_{200}/M_\odot) \in [13.5,\,15.0]$.
+
+  \item \textbf{BCG stellar mass.}
+        \begin{equation}
+          \log_{10}\!\left(\frac{M_\mathrm{BCG}}{M_\odot}\right)
+          = 0.4\,\log_{10}\!\left(\frac{M_\mathrm{halo}}{M_\odot}\right)
+          + 6
+          + \mathcal{N}(0,\,0.15^2).
+        \end{equation}
+
+  \item \textbf{Satellite galaxies.}  Drawn from the Zheng et al.\ (2007) halo
+        occupation distribution (HOD) calibrated to the SDSS 18 sample.
+        Clusters with zero detected satellites are rejected.
+
+  \item \textbf{Magnitude gap.}
+        \begin{equation}
+          \Delta m = 2.5\,\log_{10}\!\left(\frac{L_\mathrm{BCG}}{L_\mathrm{brightest\;sat}}\right)
+          \quad[\mathrm{mag}],
+        \end{equation}
+        positive by construction.
+
+  \item \textbf{NFW concentration.}  The concentration is modelled as
+        \begin{equation}
+          \log_{10} c = \log_{10} c_\mathrm{DM14}(z,M)
+          + \gamma_\mathrm{true}\,\log_{10}\!\left(\frac{\Delta m}{\Delta m_\mathrm{ref}}\right)
+          + \mathcal{N}(0,\,\sigma_{\log c}^2),
+        \end{equation}
+        with $\sigma_{\log c} = 0$ (no intrinsic scatter in this run),
+        $\gamma_\mathrm{true} = 0.2$, and $\Delta m_\mathrm{ref} = 0.1$~mag.
+        The Dutton \& Maccio (2014) baseline concentration is
+        \begin{equation}
+          \log_{10} c_\mathrm{DM14} = 0.905
+          - 0.101\,\log_{10}\!\left(\frac{M_{200}\,h}{10^{12}\,M_\odot}\right).
+        \end{equation}
+
+  \item \textbf{Resampling to DES Y3 $n(z)$.}  From the 25{,}000-cluster pool,
+        draw $N = 5000$ clusters \emph{without replacement}, weighted by
+        $P(z) \propto z^2$ on $z \in [0.2,\,0.65]$.  This is a volume-weighted
+        approximation to the DES Y3 cluster redshift distribution.
+\end{enumerate}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/des_y3_nz.png}
+  \caption{DES Y3 cluster and source redshift distributions used in the simulation.}
+  \label{fig:des_y3_nz}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/simulation_000/truth_distributions.png}
+  \caption{Truth catalog properties for simulation 000: redshift, log halo mass,
+  concentration, and $\Delta m$ distributions.}
+  \label{fig:truth_distributions}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/simulation_000/mc_scatter.png}
+  \caption{Mass--concentration scatter coloured by $\Delta m$ (left) and
+  concentration vs.\ $\Delta m$ (right) for simulation 000.
+  The applied $\gamma = 0.2$ slope is visible as a positive trend in the right panel.}
+  \label{fig:mc_scatter}
+\end{figure}
+
+\subsection{Triaxial shapes}
+\label{sec:triaxial}
+
+Each cluster is assigned random triaxial axis ratios and a random line-of-sight
+(LOS) orientation, drawn independently:
+
+\begin{itemize}
+  \item Intermediate-to-major axis ratio: $b/a \sim \mathrm{Uniform}[0.5,\,1.0]$.
+  \item Minor-to-major axis ratio: $c/a \sim \mathrm{Uniform}[0.3,\,b/a]$
+        (ensures $c/a \leq b/a$).
+  \item LOS polar angle: $\theta_\mathrm{los} = \arccos(U)$ with
+        $U \sim \mathrm{Uniform}[0,\,1]$ (isotropic).
+  \item LOS azimuthal angle: $\phi_\mathrm{los} \sim \mathrm{Uniform}[0,\,2\pi]$.
+\end{itemize}
+
+The virial semi-major axis $a = r_\mathrm{vir}(M, z)$ is computed using the
+\texttt{cluster\_toolkit} package.
+
+\subsection{Miscentering}
+\label{sec:miscenter}
+
+Cluster centres may be offset from the true halo centre:
+
+\begin{itemize}
+  \item Centred fraction: $F_\mathrm{cen} = 0.64$; miscentered fraction:
+        $F_\mathrm{mis} = 1 - F_\mathrm{cen} = 0.36$.
+  \item Offset magnitude for miscentered clusters:
+        $r_\mathrm{off} \sim \mathrm{Rayleigh}(\sigma_\mathrm{off})$ with
+        $\sigma_\mathrm{off} = 0.32\,h^{-1}$~Mpc.
+        Using the Planck 2018 value $h = 0.6736$ gives
+        $\sigma_\mathrm{off} \approx 0.475$~Mpc.
+  \item Offset direction: $\phi_\mathrm{mis} \sim \mathrm{Uniform}[0,\,2\pi]$.
+  \item Centred clusters: $r_\mathrm{off} = 0$.
+\end{itemize}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/simulation_000/miscentering_offsets.png}
+  \caption{Miscentering model: offset magnitude distribution (left) and 2D offset
+  positions (right).  36\% of clusters are miscentered.}
+  \label{fig:miscentering}
+\end{figure}
+
+\subsection{Source catalog and lensing simulation}
+\label{sec:sources}
+
+For each cluster $i$ the following procedure is used to generate source galaxies
+and measure the $\Delta\Sigma$ profile.
+
+\begin{enumerate}
+  \item \textbf{Source positions.}  Galaxy positions are drawn from a
+        Poisson process on a square field of width 0.006~rad, at a
+        surface density of 30~gal\,arcmin$^{-2}$.
+
+  \item \textbf{Source redshifts.}  Drawn from the Smail distribution
+        \begin{equation}
+          n(z) \propto \left(\frac{z}{z_0}\right)^\alpha
+          \exp\!\left[-\left(\frac{z}{z_0}\right)^\beta\right],
+          \quad z \in [0,\,2.5],
+        \end{equation}
+        with $\alpha = 2$, $\beta = 1.5$, $z_0 = 0.4$.
+
+  \item \textbf{Background cut.}  Sources are retained only if
+        $z_s > 1.1\,z_l + 0.2$.
+
+  \item \textbf{Intrinsic ellipticities.}  Drawn from a \texttt{GPriorBA}
+        distribution with shape-noise parameter $\sigma = 0.27$.
+
+  \item \textbf{Metacalibration responsivity.}  Per-source responsivity
+        $\mathcal{R} \sim \mathrm{LogNormal}(\ln 0.5,\; 0.5)$, clipped to
+        $[0.05,\,0.99]$.
+
+  \item \textbf{Triaxial NFW shear.}  The function
+        \texttt{apply\_triaxial\_NFW\_shear\_region} from \texttt{xlensing} is
+        used to apply the gravitational shear field of the triaxial NFW halo to
+        each source.  The cluster centre is placed at position
+        $(r_\mathrm{off}\cos\phi_\mathrm{mis},\;r_\mathrm{off}\sin\phi_\mathrm{mis})$
+        relative to the field centre.
+
+  \item \textbf{$\Delta\Sigma$ measurement.}  The profile is measured via
+        \texttt{metacal\_cluster\_lensing} and the \texttt{signal()} method from
+        \texttt{xlensing}.
+
+  \item \textbf{Rejection.}  Clusters with fewer than 20 background sources
+        after the redshift cut are discarded.
+\end{enumerate}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/simulation_000/sample_profiles.png}
+  \caption{Six example $\Delta\Sigma$ profiles.  Triangles indicate miscentered
+  clusters.}
+  \label{fig:sample_profiles}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/simulation_000/triaxiality_diagnostic.png}
+  \caption{Fractional residuals $(\mathrm{data} - \mathrm{truth\;NFW})/(\mathrm{truth\;NFW})$
+  showing the scatter injected by triaxiality.  The vertical dashed line marks
+  $R_\mathrm{min} = 0.5$~Mpc.}
+  \label{fig:triaxiality}
+\end{figure}
+
+\subsection{Radial binning}
+\label{sec:bins}
+
+Twelve radial bins are log-spaced between $R = 0.158$~Mpc and $R = 6.31$~Mpc.
+Bin centres and edges are computed as follows:
+
+\begin{verbatim}
+radii = np.logspace(-0.8, 0.8, 12)        # 12 bin centres [Mpc]
+dlog  = (log10(radii[-1]) - log10(radii[0])) / 11
+edges = np.logspace(log10(radii[0])  - dlog/2,
+                    log10(radii[-1]) + dlog/2, 13)
+\end{verbatim}
+
+The per-cluster diagonal covariance for bin $b$ is
+\begin{equation}
+  \sigma_b^2 =
+  \begin{cases}
+    \displaystyle\left(\frac{\sigma_\mathrm{shape}\,\bar\Sigma_\mathrm{crit}}{\sqrt{n_b}}\right)^{\!2}
+    & n_b \geq 5,\\[8pt]
+    10^4\;(M_\odot/\mathrm{pc}^2)^2 & n_b < 5,
+  \end{cases}
+\end{equation}
+where $\sigma_\mathrm{shape} = 0.27$, $\bar\Sigma_\mathrm{crit}$ is the
+mean critical surface density for the cluster, and $n_b$ is the number of
+background sources in bin $b$.
+
+\textbf{Radial cut for fitting}: only bins with $R \geq 0.5$~Mpc are retained,
+leaving 7 of the 12 bins.
+
+\subsection{Cluster observable table}
+\label{sec:obs}
+
+In addition to the $\Delta\Sigma$ data vectors and covariance matrices, each
+cluster contributes the following per-cluster observables to the likelihood:
+
+\begin{itemize}
+  \item \textbf{Richness $\lambda$}: derived by inverting the
+        McClintock et al.\ (2018) mass--richness relation.
+  \item \textbf{Magnitude gap $\Delta m$}: taken directly from the truth catalog.
+  \item \textbf{Population miscentering parameters}: $F_\mathrm{mis} = 0.36$ and
+        $\sigma_\mathrm{off} = 0.475$~Mpc, constant for all clusters.
+        These are not resampled during the bootstrap.
+\end{itemize}
+
+% ============================================================
+\section{Analysis Pipeline}
+% ============================================================
+
+\subsection{Scaling relation model}
+\label{sec:model}
+
+The NFW concentration for cluster $i$ is modelled as
+\begin{equation}
+  \log_{10} c_i = \log_{10} c_0
+  + \alpha\,\bigl(\log_{10} M_i - \log_{10} M_\mathrm{piv}\bigr)
+  + \beta\,\log_{10}\!\left(\frac{1+z_i}{1+z_\mathrm{ref}}\right)
+  + \gamma\,\log_{10}\!\left(\frac{\Delta m_i}{\Delta m_\mathrm{ref}}\right)
+  + \log\_M\_norm,
+  \label{eq:scaling}
+\end{equation}
+with pivot mass $M_\mathrm{piv} = 10^{14.344}\,M_\odot$ (McClintock et al.\ 2018),
+$z_\mathrm{ref} = 0.35$, and $\Delta m_\mathrm{ref} = 0.1$~mag.
+The predicted $\Delta\Sigma$ profile is computed via \texttt{xlensing}
+\texttt{NFW\_Delta\_Sigma}.
+
+Miscentering is modelled as a population mixture:
+\begin{equation}
+  \Delta\Sigma_{\mathrm{model},i}(r;\theta)
+  = (1 - F_\mathrm{mis})\,\Delta\Sigma_\mathrm{NFW}(r;\,c_i,M_i,z_i)
+  + F_\mathrm{mis}\,\Delta\Sigma_\mathrm{off}(r;\,c_i,M_i,z_i,\sigma_\mathrm{off}),
+  \label{eq:miscenter_model}
+\end{equation}
+where $\Delta\Sigma_\mathrm{off}$ is the azimuthally-averaged NFW profile
+displaced by a Rayleigh-distributed offset radius.
+
+\subsection{Log-likelihood}
+\label{sec:likelihood}
+
+For cluster $i$ the residual is
+$\mathbf{r}_i(\theta) = \mathbf{d}_i - \mathbf{m}_i(\theta)$,
+where $\mathbf{d}_i$ is the 7-element $\Delta\Sigma$ data vector (bins with
+$R \geq 0.5$~Mpc) and $\mathbf{m}_i(\theta)$ is the corresponding model
+prediction at parameter vector
+$\theta = (c_0,\,\alpha,\,\beta,\,\gamma,\,\log\_M\_norm)$.
+The covariance $\mathbf{C}_i$ is diagonal (shape noise only).
+
+The joint log-likelihood is
+\begin{equation}
+  \ell(\theta) = \sum_{i=1}^{N} \ell_i(\theta),
+  \qquad
+  \ell_i(\theta) = -\tfrac{1}{2}\Bigl[
+    k\ln(2\pi)
+    + \ln|\mathbf{C}_i|
+    + \mathbf{r}_i^\top \mathbf{C}_i^{-1} \mathbf{r}_i
+  \Bigr],
+  \label{eq:loglike}
+\end{equation}
+with $k = 7$ radial bins per cluster.  The diagonal structure of $\mathbf{C}_i$
+means that $\ln|\mathbf{C}_i| = \sum_b \ln \sigma_{i,b}^2$ and
+$\mathbf{r}_i^\top\mathbf{C}_i^{-1}\mathbf{r}_i = \sum_b r_{i,b}^2/\sigma_{i,b}^2$;
+the Cholesky decomposition is used in the implementation for numerical stability.
+
+\subsection{Priors}
+\label{sec:priors}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Parameter priors used in the Nautilus sampling.}
+  \label{tab:priors}
+  \begin{tabular}{lll}
+    \toprule
+    Parameter & Prior & Motivation \\
+    \midrule
+    $c_0$ & $\mathcal{N}(4.57,\;0.05^2)$ & DM14 pivot at survey mean \\
+    $\alpha$ & $\mathcal{N}(-0.10,\;0.05^2)$ & Mass slope \\
+    $\beta$ & $\mathcal{N}(-0.40,\;0.20^2)$ & Redshift slope \\
+    $\gamma$ & $\mathcal{N}(0.0,\;3.5^2)$ & Magnitude-gap slope (weak) \\
+    $\log\_M\_norm$ & $\mathcal{N}(0.0,\;0.10^2)$ & Mass normalisation \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Sampler}
+\label{sec:sampler}
+
+The posterior is explored with the Nautilus nested sampler
+(Lange 2023).  Settings:
+\begin{itemize}
+  \item Number of live points: $n_\mathrm{live} = 400$.
+  \item Wall-time timeout: 600~s per run.
+  \item Rank-1 covariance inflation: $\varepsilon = 0$ (disabled).
+  \item Parallelism: pool of 15 workers for the likelihood evaluation.
+\end{itemize}
+The posterior is extracted via \texttt{sampler.posterior()};
+the marginal median and 68\% credible interval for $\gamma$ are computed
+from the weighted samples using weighted quantiles.
+
+% ============================================================
+\section{Bootstrap Calibration Design}
+% ============================================================
+
+\subsection{Motivation}
+\label{sec:motivation}
+
+Individual Nautilus posteriors on $\gamma$ correctly capture
+\emph{shape-noise uncertainty} --- the variation in $\hat\gamma$ due to finite
+numbers of background source galaxies.  They do not, however, capture
+\emph{cluster sample variance} --- the variation arising because any realisation
+of a 5000-cluster survey is one random draw from the underlying cluster
+population.  This causes the posterior widths $\sigma_\mathrm{post}$ to be
+systematically narrower than the true uncertainty.
+
+An earlier calibration study (running the pipeline on many independent
+simulated datasets) confirmed this: the ratio of the run-to-run scatter of the
+posterior median to the mean posterior half-width was
+$R = \sigma_\mathrm{runs} / \langle\sigma_\mathrm{post}\rangle \approx 2.16$
+for standard runs with fresh data each time.  Reporting the individual posterior
+width as the uncertainty on $\gamma$ would therefore under-estimate the true
+uncertainty by more than a factor of two.
+
+The bootstrap addresses this by propagating the uncertainty through the full
+analysis on many resampled versions of the \emph{same} fixed dataset, without
+requiring new simulated data.
+
+\subsection{Nested design}
+\label{sec:design}
+
+The calibration study employs two nested levels of randomisation.
+
+\textbf{Outer loop} ($K = 10$ independent simulations):
+For each simulation index $k \in \{0,\ldots,9\}$, generate a fresh truth catalog
+and lensing dataset following Sections~\ref{sec:truth}--\ref{sec:obs}.
+Each outer simulation is a genuinely independent realisation of a 5000-cluster
+DES Y3-like survey.
+
+\textbf{Inner loop} ($B = 10$ bootstrap draws per simulation):
+Fix the dataset from simulation $k$.  For each bootstrap draw $b \in \{0,\ldots,B-1\}$:
+
+\begin{enumerate}
+  \item Draw resample indices with replacement:
+        \begin{equation}
+          \mathbf{I}^{(b)} = \mathrm{rng.choice}(N,\;N,\;\mathrm{replace}=\mathrm{True}).
+        \end{equation}
+        The expected fraction of unique clusters is $1 - e^{-1} \approx 63.2\%$
+        (observed $\approx 63.5\%$); the remaining $\approx 36.8\%$ are
+        out-of-bag and receive zero weight.
+
+  \item Construct the resampled dataset:
+        \begin{align}
+          \mathbf{d}^{(b)} &= \mathbf{d}[\mathbf{I}^{(b)}],\\
+          \mathbf{C}^{(b)} &= \mathbf{C}[\mathbf{I}^{(b)}],\\
+          \mathrm{cluster\_table}^{(b)} &= \mathrm{cluster\_table}[\mathbf{I}^{(b)}].
+        \end{align}
+
+  \item \textbf{Population constants are not resampled.}
+        $F_\mathrm{mis} = 0.36$ and $\sigma_\mathrm{off} = 0.475$~Mpc are
+        passed as \texttt{np.full(N, value)} arrays and are identical for
+        every bootstrap draw and every simulation.
+
+  \item Run Nautilus on
+        $(\mathbf{d}^{(b)},\;\mathbf{C}^{(b)},\;\mathrm{cluster\_table}^{(b)})$
+        and extract the posterior median $\hat\gamma^{(k,b)}$.
+\end{enumerate}
+
+\subsection{Ensemble statistics per simulation}
+\label{sec:ensemble}
+
+From the $B$ bootstrap draws of simulation $k$, two summary statistics are
+computed:
+\begin{align}
+  \hat\gamma_\mathrm{ens}^{(k)} &= \mathrm{median}_b\bigl(\hat\gamma^{(k,b)}\bigr),
+  \label{eq:gamma_ens}\\
+  \sigma_\mathrm{boot}^{(k)} &= \mathrm{std}_b\bigl(\hat\gamma^{(k,b)}\bigr)
+  \quad [\text{ddof}=1].
+  \label{eq:sigma_boot}
+\end{align}
+The ensemble median $\hat\gamma_\mathrm{ens}^{(k)}$ is a robust point estimate
+for simulation $k$, and $\sigma_\mathrm{boot}^{(k)}$ is the bootstrap estimate
+of the uncertainty on that point estimate.
+
+\subsection{Calibration check across outer simulations}
+\label{sec:calcheck}
+
+The calibration check tests whether $\sigma_\mathrm{boot}$ correctly predicts
+the scatter of $\hat\gamma_\mathrm{ens}$ across independent surveys:
+\begin{equation}
+  \boxed{R_\mathrm{cal}
+  = \frac{\mathrm{std}_k\!\left(\hat\gamma_\mathrm{ens}^{(k)}\right)}
+         {\mathrm{mean}_k\!\left(\sigma_\mathrm{boot}^{(k)}\right)}
+  \approx 1.}
+  \label{eq:rcal}
+\end{equation}
+If $R_\mathrm{cal} \approx 1$, the bootstrap uncertainty $\sigma_\mathrm{boot}$
+correctly estimates the survey-to-survey scatter of the ensemble estimator, and
+can be reported as the uncertainty on $\gamma$ for a single observed survey.
+
+% ============================================================
+\section{Results}
+% ============================================================
+
+\subsection{Per-simulation summary table}
+\label{sec:table}
+
+Table~\ref{tab:results} summarises the key statistics for each of the $K = 10$
+outer simulations.  The bias column gives
+$(\hat\gamma_\mathrm{ens}^{(k)} - \gamma_\mathrm{true})/\sigma_\mathrm{boot}^{(k)}$
+in units of $\sigma_\mathrm{boot}$.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Per-simulation bootstrap calibration results.
+  $\hat\gamma_\mathrm{ens}$: ensemble median;
+  $\sigma_\mathrm{boot}$: bootstrap standard deviation of $\hat\gamma$;
+  $\langle\sigma_\mathrm{post}\rangle$: mean individual posterior 68\% half-width;
+  Bias: $(\hat\gamma_\mathrm{ens} - 0.2)/\sigma_\mathrm{boot}$.}
+  \label{tab:results}
+  \begin{tabular}{ccccc}
+    \toprule
+    Sim & $\hat\gamma_\mathrm{ens}$ & $\sigma_\mathrm{boot}$ &
+    $\langle\sigma_\mathrm{post}\rangle$ & Bias ($\sigma_\mathrm{boot}$) \\
+    \midrule
+    0 & $-0.096$ & $0.528$ & $0.149$ & $-0.56$ \\
+    1 & $-0.065$ & $0.345$ & $0.126$ & $-0.77$ \\
+    2 & $+0.343$ & $0.370$ & $0.162$ & $+0.39$ \\
+    3 & $+0.084$ & $0.248$ & $0.103$ & $-0.47$ \\
+    4 & $+0.836$ & $0.561$ & $0.106$ & $+1.14$ \\
+    5 & $+0.517$ & $0.567$ & $0.126$ & $+0.56$ \\
+    6 & $+0.478$ & $0.195$ & $0.152$ & $+1.42$ \\
+    7 & $+0.423$ & $0.483$ & $0.191$ & $+0.46$ \\
+    8 & $-0.437$ & $0.250$ & $0.112$ & $-2.55$ \\
+    9 & $+0.219$ & $0.504$ & $0.163$ & $+0.04$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Calibration statistics}
+\label{sec:calstats}
+
+The aggregate calibration statistics across all $K = 10$ simulations are:
+
+\begin{align}
+  \mathrm{mean}_k\!\left(\hat\gamma_\mathrm{ens}^{(k)}\right)
+  &= +0.230
+  \quad\bigl[\gamma_\mathrm{true} = 0.200;\;\text{mean bias} = +0.030\bigr],
+  \label{eq:mean_gamma}\\[4pt]
+  \mathrm{std}_k\!\left(\hat\gamma_\mathrm{ens}^{(k)}\right)
+  &= 0.368
+  \quad\leftarrow\text{scatter of ensemble medians across simulations},
+  \label{eq:std_gamma}\\[4pt]
+  \mathrm{mean}_k\!\left(\sigma_\mathrm{boot}^{(k)}\right)
+  &= 0.405
+  \quad\leftarrow\text{mean bootstrap uncertainty estimate},
+  \label{eq:mean_boot}\\[4pt]
+  \mathrm{mean}_k\!\left(\langle\sigma_\mathrm{post}\rangle^{(k)}\right)
+  &= 0.139
+  \quad\leftarrow\text{mean individual posterior half-width}.
+  \label{eq:mean_post}
+\end{align}
+
+The calibration ratio is
+\begin{equation}
+  \boxed{R_\mathrm{cal}
+  = \frac{\mathrm{std}_k(\hat\gamma_\mathrm{ens}^{(k)})}
+         {\mathrm{mean}_k(\sigma_\mathrm{boot}^{(k)})}
+  = \frac{0.368}{0.405} = 0.91.}
+  \label{eq:rcal_result}
+\end{equation}
+
+The bootstrap inflation factor relative to the individual posteriors is
+\begin{equation}
+  \frac{\mathrm{mean}_k(\sigma_\mathrm{boot}^{(k)})}
+       {\mathrm{mean}_k(\langle\sigma_\mathrm{post}\rangle^{(k)})}
+  = \frac{0.405}{0.139} = 2.91.
+  \label{eq:inflation}
+\end{equation}
+
+The mean bias of $+0.030$ is well within one-tenth of a $\sigma_\mathrm{boot}$,
+confirming that the ensemble median is an approximately unbiased estimator of
+$\gamma_\mathrm{true} = 0.2$ when averaged over many independent surveys.
+
+\subsection{Discussion of multimodal posteriors}
+\label{sec:multimodal}
+
+The likelihood surface for $\gamma$ exhibits known spurious modes.  Bootstrap
+scatter plots (Figures~\ref{fig:gamma_residuals_000} and~\ref{fig:gamma_residuals_004})
+reveal two secondary modes at approximately $\hat\gamma \approx +1.0$ to $+1.3$
+and $\hat\gamma \approx -0.5$ to $-0.6$, in addition to the primary mode near
+$\gamma_\mathrm{true} = 0.2$.
+
+For simulations 4 and 5, a majority of bootstrap draws land in the upper
+spurious mode, producing ensemble medians ($\hat\gamma_\mathrm{ens} = +0.836$
+and $+0.517$) substantially above $\gamma_\mathrm{true}$.  Despite this,
+$R_\mathrm{cal} = 0.91 \approx 1$ because $\sigma_\mathrm{boot}$ correctly
+tracks the width of the bootstrap distribution --- whether it is centred on
+the correct mode or not.  The bootstrap is therefore \emph{consistent} in the
+sense that it accurately reports the uncertainty of the ensemble estimator, even
+when that estimator is biased due to modal confusion.
+
+The overlaid posteriors (Figure~\ref{fig:posteriors_overlay}) make the
+multi-modal structure visible: individual bootstrap draws contribute distinct
+peaks across the three modes, and the ensemble spread faithfully reflects the
+resulting uncertainty.
+
+\subsection{Figures}
+\label{sec:figures}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/simulation_000/gamma_residuals.png}
+  \caption{Bootstrap scatter for simulation 000.  Error bars are individual
+  posterior 68\% credible intervals.  The horizontal band shows $\pm\sigma_\mathrm{boot}$.}
+  \label{fig:gamma_residuals_000}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/simulation_004/gamma_residuals.png}
+  \caption{Bootstrap scatter for simulation 004 --- an example where most draws
+  land in the upper spurious mode near $\hat\gamma \approx +1.1$.}
+  \label{fig:gamma_residuals_004}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/simulation_000/posteriors_overlay.png}
+  \caption{Overlaid $\gamma$ posteriors from all 10 bootstrap draws of simulation 000.
+  Multiple modes are visible.}
+  \label{fig:posteriors_overlay}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../gamma_repeat_resampled_outputs/run_2026-05-23T16-46-18/calibration_summary.png}
+  \caption{Main calibration result: ensemble $\hat\gamma$ per simulation (points)
+  with $\sigma_\mathrm{boot}$ error bars (lines).  The shaded band is
+  $\pm\mathrm{std}(\hat\gamma_\mathrm{ens})$.  The inset reports the calibration ratio.}
+  \label{fig:calibration_summary}
+\end{figure}
+
+% ============================================================
+\section{Conclusions}
+% ============================================================
+
+The main findings of this bootstrap calibration study are as follows.
+
+\textbf{The bootstrap is well-calibrated.}
+The calibration ratio $R_\mathrm{cal} = 0.91$ is consistent with unity within
+the statistical uncertainty of $K = 10$ simulations.  Using the approximation
+$\sigma(R_\mathrm{cal}) \approx R_\mathrm{cal}/\sqrt{2(K-1)} \approx 0.21$, the
+result $R_\mathrm{cal} = 0.91$ lies within $0.4\,\sigma$ of 1.  The bootstrap
+therefore correctly estimates the survey-level uncertainty on $\gamma$, and
+$\sigma_\mathrm{boot}$ should be adopted as the reported uncertainty when
+analysing a single observed survey.
+
+\textbf{Bootstrap inflation of $\sim 3\times$ over individual posteriors.}
+The ratio $\sigma_\mathrm{boot}/\langle\sigma_\mathrm{post}\rangle = 2.91$
+confirms that the dominant missing variance in individual Nautilus posteriors is
+not measurement (shape) noise but cluster-sample variance and modal variance.
+Reporting the individual posterior width as the uncertainty on $\gamma$ would
+underestimate the true uncertainty by nearly a factor of three.
+
+\textbf{Multimodality is the main practical limitation.}
+The likelihood surface exhibits spurious modes at $\gamma \approx +1.0$--$+1.3$
+and $\gamma \approx -0.5$--$-0.6$.  In some survey realisations
+(e.g.\ simulations 4 and 5) the majority of bootstrap draws are captured by the
+upper spurious mode, producing ensemble medians far from $\gamma_\mathrm{true}$.
+Resolving or suppressing these spurious modes --- through tighter priors,
+reparametrisation, or a dedicated mode-finding step --- is the highest-priority
+next step for the analysis.
+
+\textbf{Bootstrap sample size.}
+With $B = 10$ draws the statistical uncertainty on $\sigma_\mathrm{boot}$ itself
+is $\sigma(\sigma_\mathrm{boot})/\sigma_\mathrm{boot} \approx 1/\sqrt{2(B-1)} \approx 24\%$.
+Increasing to $B = 50$ would reduce this to $\approx 10\%$, providing a much
+more stable estimate of $\sigma_\mathrm{boot}$ per simulation.
+
+\end{document}

@@ -1,0 +1,429 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{siunitx}
+
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\newcommand{\DS}{\Delta\Sigma}
+\newcommand{\Msun}{\,M_{\odot}}
+\newcommand{\Mpc}{\,\mathrm{Mpc}}
+\newcommand{\unitvec}[1]{\hat{\mathbf{#1}}}
+\newcommand{\Reff}{r_{\rm eff}}
+
+\title{\textbf{Simulating Triaxial NFW Clusters and Their Lensing Signal}\\[0.4em]
+\large \texttt{xlensing.sims} -- algorithmic and mathematical description}
+\author{destacking project}
+\date{2026 June 9}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We document the algorithm used by \texttt{xlensing.sims} to inject the
+weak-lensing signal of a triaxial NFW cluster into a background-galaxy
+catalogue. The pipeline has three steps: (i) draw a 3D triaxial ellipsoid
+with CDM-like axis-ratio priors and an isotropic line of sight, (ii)
+project the ellipsoid to a 2D ellipse via the Schur complement of its
+shape matrix, and (iii) replace the spherical NFW radius by an
+effective elliptic radius that preserves the area of isodensity contours,
+evaluating the standard NFW shear of Wright \& Brainerd (1999) at that
+effective radius with the shear direction taken from the gradient of the
+elliptic-radius field. The whole construction reduces analytically and
+exactly to the spherical case in the limit $q_{\rm maj} = q_{\rm min}$.
+\end{abstract}
+
+\tableofcontents
+\bigskip
+
+
+\section{Overview and notation}
+
+We use the following symbols throughout.
+
+\begin{tabular}{ll}
+$z_l$, $M_{200m}$, $c_{200m}$    & cluster lens redshift, mass, NFW concentration \\
+$z_s$                            & background source redshift \\
+$D_A(z_1, z_2)$                  & angular diameter distance between $z_1$ and $z_2$ \\
+$\bar{\rho}_M(z)$                & mean matter density at $z$ \\
+$\Sigma_{\rm crit}(z_l, z_s)$    & lensing critical surface mass density \\
+$r_{200m}$, $r_s$                & virial and scale radii of the NFW profile \\
+$\delta_c$                       & NFW characteristic over-density \\
+$g_{\rm NFW}(x)$                 & dimensionless NFW shear profile (Wright \& Brainerd 1999) \\
+$(a, b, c)$                      & 3D semi-axes of the triaxial ellipsoid, $a \ge b \ge c$ \\
+$(\theta_{\rm los}, \phi_{\rm los})$ & line-of-sight direction in the ellipsoid frame \\
+$(q_{\rm maj}, q_{\rm min}, \psi)$ & projected semi-major / semi-minor axes
+                                     and position angle \\
+$\Reff$                          & elliptic effective radius (Section~\ref{sec:effr}) \\
+$\gamma_t$                       & tangential NFW shear at a given radius \\
+$g = g_1 + i g_2$                & complex shear in the (RA, Dec) sky frame \\
+\end{tabular}
+
+\bigskip
+
+The algorithm is the following loop, for each cluster:
+\begin{enumerate}
+\item Draw $(a, b, c, \theta_{\rm los}, \phi_{\rm los})$
+      (Section~\ref{sec:draw}).
+\item Project the ellipsoid to a sky-plane ellipse
+      $(q_{\rm maj}, q_{\rm min}, \psi)$
+      (Section~\ref{sec:proj}).
+\item For every source in the catalogue, compute the elliptic
+      effective radius $\Reff$ and shear orientation $\phi_{\rm eff}$,
+      then apply the spherical NFW shear at $\Reff$ rotated by $\phi_{\rm eff}$
+      (Sections~\ref{sec:effr}--\ref{sec:apply}).
+\end{enumerate}
+
+The code lives in \texttt{xlensing.sims}; the relevant functions are
+\texttt{sample\_triaxial\_shapes}, \texttt{project\_ellipsoid},
+\texttt{triaxial\_NFW\_wcs\_cluster\_shear}, and
+\texttt{apply\_triaxial\_NFW\_shear\_region}.
+
+\section{Spherical NFW shear (reference)}
+
+The triaxial pipeline reuses the spherical NFW shear of
+Wright \& Brainerd (1999) at an elliptic effective radius. The spherical
+expressions used in the simulator are:
+\begin{align}
+\bar\rho_M(z) &= \Omega_M\,\rho_{\rm crit}(z), \\[2pt]
+r_{200m}(z_l, M) &= \left[\frac{3 M}{4\pi \Delta_{m}\bar\rho_M(z_l)}\right]^{1/3},
+   \quad \Delta_m = 200, \\[2pt]
+\delta_c(c) &= \frac{\Delta_m}{3} \cdot \frac{c^3}{\ln(1+c) - c/(1+c)}, \\[2pt]
+\Sigma_{\rm crit}(z_l, z_s) &= \frac{c_{\rm light}^2}{4\pi G}\,
+   \frac{D_A(0, z_s)}{D_A(0, z_l)\,D_A(z_l, z_s)}, \\[2pt]
+r_s(z_l, M, c) &= r_{200m}(z_l, M)/c.
+\end{align}
+The dimensionless NFW shear $g_{\rm NFW}(x)$ with $x = r/r_s$ is the
+closed-form expression of Wright \& Brainerd (their eq.~14):
+\begin{equation}
+g_{\rm NFW}(x) =
+\begin{cases}
+\displaystyle
+   \frac{8\,\mathrm{arctanh}\!\sqrt{(1-x)/(1+x)}}{x^2\sqrt{1-x^2}}
+ + \frac{4}{x^2}\,\ln(x/2)
+ - \frac{2}{x^2-1}
+ + \frac{4\,\mathrm{arctanh}\!\sqrt{(1-x)/(1+x)}}{(x^2-1)\sqrt{1-x^2}},
+   & x < 1,\\[10pt]
+\displaystyle
+   \frac{8\,\mathrm{arctan}\!\sqrt{(x-1)/(1+x)}}{x^2\sqrt{x^2-1}}
+ + \frac{4}{x^2}\,\ln(x/2)
+ - \frac{2}{x^2-1}
+ + \frac{4\,\mathrm{arctan}\!\sqrt{(x-1)/(1+x)}}{(x^2-1)\sqrt{x^2-1}},
+   & x > 1,\\[10pt]
+\displaystyle \frac{10}{3} + 4\ln(1/2),
+   & x = 1.
+\end{cases}
+\end{equation}
+The spherical tangential shear at a projected radius $r$ is then
+\begin{equation}
+\gamma_t^{\rm sph}(r;\,z_l, M, c, z_s)
+ \;=\; \frac{r_s\,\delta_c\,\bar\rho_M(z_l)}{\Sigma_{\rm crit}(z_l, z_s)}
+       \;g_{\rm NFW}\!\left(\frac{r}{r_s}\right).
+\label{eq:gammat-sph}
+\end{equation}
+For a spherical halo, the complex shear in the equatorial frame is
+$g = \gamma_t^{\rm sph}(r)\,e^{2 i \theta}$ where $\theta$ is the polar angle
+of the source measured from north toward east.
+
+\section{Drawing the 3D ellipsoid}
+\label{sec:draw}
+
+\paragraph{Axis ratios.}
+For each cluster $i$ we draw two axis ratios from priors chosen to mimic
+CDM N-body shape distributions (Allgood et al.~2006; Schneider, Frenk
+\& Cole 2012):
+\begin{align}
+b_i/a_i &\sim \mathcal{U}(q_{\rm ba,\,lo},\;q_{\rm ba,\,hi}),
+   \quad \text{default } (q_{\rm ba,\,lo}, q_{\rm ba,\,hi}) = (0.5, 1.0),\\
+c_i/a_i &\sim \mathcal{U}(q_{\rm ca,\,lo},\;\,b_i/a_i),
+   \quad \text{default } q_{\rm ca,\,lo} = 0.3.
+\end{align}
+The hierarchical bound $c/a \le b/a$ enforces the ordering
+$a \ge b \ge c$ exactly. The semi-major axis $a_i$ is set to the spherical
+virial radius $r_{200m}(z_i, M_i)$; the other two semi-axes are
+$b_i = (b/a)_i\, a_i$ and $c_i = (c/a)_i\, a_i$.
+
+\paragraph{Line of sight.}
+The orientation of the principal axes with respect to the observer is
+drawn isotropically. Writing the LOS unit vector
+in the ellipsoid principal frame as
+\begin{equation}
+\unitvec{n}(\theta_{\rm los}, \phi_{\rm los})
+ \;=\; (\sin\theta_{\rm los}\cos\phi_{\rm los},\;
+        \sin\theta_{\rm los}\sin\phi_{\rm los},\;
+        \cos\theta_{\rm los}),
+\end{equation}
+the prior is uniform on the sphere:
+\begin{equation}
+\cos\theta_{\rm los} \sim \mathcal{U}(0, 1),\qquad
+\phi_{\rm los}       \sim \mathcal{U}(0, 2\pi).
+\end{equation}
+Drawing the upper half-sphere ($\cos\theta_{\rm los} > 0$) loses no
+generality because the ellipsoid is centrally symmetric. The
+\verb|isotropic_los=False| option freezes $\theta_{\rm los}=0$ to
+produce face-on views along the $c$-axis (useful for diagnostics).
+
+\section{Projecting the ellipsoid onto the sky}
+\label{sec:proj}
+
+The 3D ellipsoid surface $\mathbf{x}^\top Q\, \mathbf{x} = 1$ has the
+diagonal shape matrix
+\begin{equation}
+Q \;=\; \mathrm{diag}\!\left(\tfrac{1}{a^2},\;\tfrac{1}{b^2},\;\tfrac{1}{c^2}\right)
+\end{equation}
+in the principal frame. To project it along $\unitvec{n}$ onto the
+plane perpendicular to $\unitvec{n}$ (the sky plane), we eliminate the
+LOS component using the Schur complement of $Q$:
+\begin{equation}
+M_{ij} \;=\; \unitvec{e}_i^\top Q\,\unitvec{e}_j
+            \;-\; \frac{(\unitvec{e}_i^\top Q\,\unitvec{n})\,
+                          (\unitvec{e}_j^\top Q\,\unitvec{n})}
+                        {\unitvec{n}^\top Q\,\unitvec{n}},
+\qquad i,j \in \{1, 2\},
+\label{eq:Mij}
+\end{equation}
+where $(\unitvec{e}_1, \unitvec{e}_2)$ is any orthonormal basis of the
+sky plane. We build it by Gram--Schmidt:
+\begin{equation}
+\unitvec{e}_1 \;=\;
+   \frac{\unitvec{a} - (\unitvec{a}\cdot\unitvec{n})\,\unitvec{n}}
+        {\|\unitvec{a} - (\unitvec{a}\cdot\unitvec{n})\,\unitvec{n}\|},
+\qquad
+\unitvec{e}_2 \;=\; \unitvec{n} \times \unitvec{e}_1,
+\end{equation}
+where $\unitvec{a}=(1,0,0)$ is the principal $a$-axis (with a fallback
+to $(0,1,0)$ when the LOS is too close to the $a$-axis to keep this
+construction numerically well-conditioned). The position angle of the
+projected major axis is therefore measured from $\unitvec{e}_1$, i.e.\
+from the sky-plane projection of the cluster's $a$-axis.
+
+\paragraph{Derivation.}
+A direction $\mathbf{x}$ in 3D can be decomposed as
+$\mathbf{x} = u\,\unitvec{e}_1 + v\,\unitvec{e}_2 + w\,\unitvec{n}$.
+The ellipsoid equation becomes
+\begin{equation}
+1 = u^2 Q_{11} + v^2 Q_{22} + w^2 (\unitvec{n}^\top Q \unitvec{n})
+   + 2 u v Q_{12} + 2 u w (\unitvec{e}_1^\top Q \unitvec{n})
+   + 2 v w (\unitvec{e}_2^\top Q \unitvec{n}),
+\end{equation}
+with $Q_{ij} \equiv \unitvec{e}_i^\top Q\, \unitvec{e}_j$ for the
+sky-plane block. Fixing $(u, v)$ and asking for the projection (the
+boundary of the shadow on the sky plane), $w$ takes the value that
+minimises the LHS over the LOS. The minimum is reached at
+$w^* = -[u(\unitvec{e}_1^\top Q\unitvec{n}) + v(\unitvec{e}_2^\top Q\unitvec{n})]/(\unitvec{n}^\top Q\unitvec{n})$,
+and substituting back yields $\mathbf{u}^\top M\, \mathbf{u} = 1$ with
+$M$ exactly as in \eqref{eq:Mij}. This is the standard projection-by-
+Schur-complement result for an ellipsoid.
+
+\paragraph{Diagonalising the projection.}
+Diagonalising the $2\times2$ symmetric $M$ gives the projected
+semi-axes and orientation:
+\begin{equation}
+M\,\mathbf{v}_k = \lambda_k\,\mathbf{v}_k, \quad k = 1, 2 \text{ (with }\lambda_1 \le \lambda_2\text{)},
+\qquad
+q_{\rm maj} = \frac{1}{\sqrt{\lambda_1}},\quad
+q_{\rm min} = \frac{1}{\sqrt{\lambda_2}},
+\end{equation}
+\begin{equation}
+\psi \;=\; \arctan2(\mathbf{v}_1[2],\;\mathbf{v}_1[1]),
+\end{equation}
+with $\psi$ measured counter-clockwise from $\unitvec{e}_1$. A fixed
+sky offset can be added a posteriori to align the principal frame with
+the (RA, Dec) frame.
+
+\section{Effective-radius mapping}
+\label{sec:effr}
+
+Given a projected ellipse $(q_{\rm maj}, q_{\rm min}, \psi)$ on the sky
+plane, every source at a 2D offset $(\Delta x, \Delta y)$ (east, north)
+from the cluster centre is mapped to an elliptic effective radius. The
+construction is the standard ``circularised'' radius that preserves the
+area of isodensity contours:
+\begin{align}
+u &=  \Delta x \sin\psi + \Delta y \cos\psi,
+   \quad \text{(along the projected major axis)}\\
+v &=  \Delta x \cos\psi - \Delta y \sin\psi,
+   \quad \text{(along the projected minor axis)}\\
+\Reff &=  \sqrt{\frac{u^2}{q_{\rm maj}^2} + \frac{v^2}{q_{\rm min}^2}}
+         \;\sqrt{q_{\rm maj}\,q_{\rm min}}.
+\label{eq:reff}
+\end{align}
+The first factor is the dimensionless elliptic radius
+$\xi=\sqrt{(u/q_{\rm maj})^2 + (v/q_{\rm min})^2}$; the second factor
+$\sqrt{q_{\rm maj}\,q_{\rm min}}$ converts $\xi$ back to a physical
+length while keeping the equal-area normalisation. In the limit
+$q_{\rm maj}=q_{\rm min}\equiv q$ this collapses to
+$\Reff = q\,(\sqrt{u^2+v^2})/q = \sqrt{u^2+v^2}$, the spherical projected
+radius, exactly. This guarantees the simulator is consistent with the
+spherical NFW case as the ellipticity is taken to zero.
+
+\paragraph{Shear orientation.}
+A spherical NFW shear at radius $r$ is purely tangential to the
+projected radius vector. For an elliptic surface density, the shear at
+$(\Delta x, \Delta y)$ is tangent to the local isodensity contour,
+i.e.\ perpendicular to the gradient $\nabla \Reff$ of the
+effective-radius field. The components of $\nabla \Reff$, rotated back to
+the (east, north) frame, are:
+\begin{align}
+g_x &= \sin\psi\,\frac{u}{q_{\rm maj}^2}
+     + \cos\psi\,\frac{v}{q_{\rm min}^2},
+\\
+g_y &= \cos\psi\,\frac{u}{q_{\rm maj}^2}
+     - \sin\psi\,\frac{v}{q_{\rm min}^2},
+\\
+\phi_{\rm eff} &= \arctan2(g_x,\; g_y).
+\label{eq:phieff}
+\end{align}
+The angle $\phi_{\rm eff}$ is the position angle (from north toward east)
+of the local isodensity normal, and the shear is rotated by this angle
+on the sky. Again, $q_{\rm maj}=q_{\rm min}$ gives
+$\phi_{\rm eff}=\arctan2(\Delta x, \Delta y)=\theta$, recovering the
+spherical convention.
+
+\section{The triaxial NFW shear}
+
+The complex shear at a source position $(\Delta x, \Delta y)$ relative
+to the cluster centre, for a cluster of mass $M$, concentration $c$,
+redshift $z_l$, and source redshift $z_s$, is
+\begin{equation}
+\boxed{\,
+\gamma(\Delta x, \Delta y;\,z_l, M, c, z_s,\, q_{\rm maj}, q_{\rm min}, \psi)
+\;=\;
+\gamma_t^{\rm sph}\!\left(\Reff;\,z_l, M, c, z_s\right)\;
+e^{2i\,\phi_{\rm eff}},
+\,}
+\label{eq:tri-shear}
+\end{equation}
+with $\gamma_t^{\rm sph}$ from \eqref{eq:gammat-sph} evaluated at the
+effective radius \eqref{eq:reff} and the orientation $\phi_{\rm eff}$
+from \eqref{eq:phieff}. The implementation uses
+$\max(\Reff, 10^{-4}\,r_s)$ as the argument of $g_{\rm NFW}$ to avoid
+the singularity at $x \to 0$.
+
+\paragraph{Approximations baked into the model.}
+Equation~\eqref{eq:tri-shear} is an \emph{affine-rescaling} model: it
+treats the triaxial halo as a spherical one whose isodensity contours
+are stretched into ellipses on the sky. The radial profile is left
+unchanged. This neglects (i) the radial variation of the projected
+ellipticity that a true 3D NFW would have (the inner ellipticity is
+slightly larger than at large radii); (ii) the fact that the projected
+surface density of a true triaxial NFW is not strictly an ellipse with
+the same axis ratio as the dark-matter ellipsoid; (iii) any radial
+dependence of the principal-axis orientation. For weak-lensing
+applications around $R \sim r_s$ to a few times $r_{200m}$, these are
+sub-leading: the dominant effect is the LOS-driven amplitude bias
+captured by the projected ellipse axis ratio, which is what
+\eqref{eq:tri-shear} retains by construction.
+
+\section{Applying the shear to a galaxy catalogue}
+\label{sec:apply}
+
+The function \texttt{apply\_triaxial\_NFW\_shear\_region} takes a
+cluster description and a galaxy catalogue and rewrites the galaxies'
+ellipticities to include the cluster's shear. Each cluster row carries
+$[\,\mathrm{RA}, \mathrm{Dec}, z, M_{200}, c_{200}, a, b, c,
+ \theta_{\rm los}, \phi_{\rm los},\, (\psi_{\rm offset})\,]$. The
+projection $(q_{\rm maj}, q_{\rm min}, \psi_{\rm intr})$ is computed
+once per cluster from $(a, b, c, \theta_{\rm los}, \phi_{\rm los})$ via
+\texttt{project\_ellipsoid}; the final PA is
+$\psi = \psi_{\rm intr} + \psi_{\rm offset}$, where the optional offset
+rotates the projected major axis into the (RA, Dec) frame.
+
+For every galaxy $j$:
+\begin{enumerate}
+\item Apply the foreground cut: only sources with $z_j > z_l$ are
+      sheared (the rest carry $\gamma_j = 0$).
+\item Compute the angular separation $\Delta\theta_j$ and azimuth
+      $\vartheta_j$ from the cluster centre with Vincenty's formula
+      (\texttt{equatorial\_to\_polar}).
+\item Convert to the physical offset at the lens plane:
+\begin{equation}
+\Delta x_j = D_A(0, z_l)\,\Delta\theta_j\sin\vartheta_j,\qquad
+\Delta y_j = D_A(0, z_l)\,\Delta\theta_j\cos\vartheta_j.
+\end{equation}
+\item Compute $R_{{\rm eff},j}$ and $\phi_{{\rm eff},j}$ from
+      \eqref{eq:reff}--\eqref{eq:phieff}.
+\item Compute the critical surface density
+      $\Sigma_{\rm crit}(z_l, z_j)$ and the spherical tangential shear
+      $\gamma_t^{\rm sph}(R_{{\rm eff},j})$ from \eqref{eq:gammat-sph} using
+      $r_s = r_{200m}(z_l, M)/c$ and the cluster's $\delta_c$.
+\item Form $\gamma_j = \gamma_t^{\rm sph}(R_{{\rm eff},j})\,e^{2 i \phi_{{\rm eff},j}}$.
+\item Add the shear to the source ellipticity using the standard
+      ellipticity-addition rule
+      $e^{\rm out}_j = (e^{\rm in}_j + \gamma_j)/(1 + \gamma_j^* e^{\rm in}_j)$,
+      implemented in \texttt{add\_shears}.
+\end{enumerate}
+
+\section{Drawing a population of triaxial clusters}
+
+The helper \texttt{sample\_triaxial\_shapes(z, M, ba\_range, ca\_lo,
+isotropic\_los, rng)} returns, for each input $(z_i, M_i)$, the
+quantities used downstream:
+$(q_{\rm ba}, q_{\rm ca}, \theta_{\rm los}, \phi_{\rm los},
+r_{\rm vir}, q_{\rm maj}, q_{\rm min}, \psi_{\rm intr})$.
+A typical injection-recovery experiment then calls
+\texttt{apply\_triaxial\_NFW\_shear\_region} for each cluster, accumulating
+the perturbation on the same shear catalogue. The mean residual at fixed
+$(M, c, z)$ measures the amplitude bias of the spherical NFW
+template when applied to triaxial systems projected at random
+orientations: at $z\!\sim\!0.4$, $M\!\sim\!10^{14}\Msun$, $c\!\sim\!5$
+and the default priors, the median spherical-vs-triaxial $\DS$ deficit
+is $\sim$15--20\,\% and is approximately constant in $R$ -- this is the
+``triaxiality bias'' that motivates the amplitude-correction parameter
+$A$ in the destacking pipeline.
+
+\section{Sanity checks and limits}
+
+\begin{itemize}
+\item \textbf{Spherical limit.} For $q_{\rm maj} = q_{\rm min}$,
+      $\Reff = \sqrt{\Delta x^2 + \Delta y^2}$ and
+      $\phi_{\rm eff} = \arctan2(\Delta x, \Delta y) = \vartheta$.
+      Equation~\eqref{eq:tri-shear} then reproduces the spherical-NFW
+      shear of \texttt{NFW\_wcs\_cluster\_shear} exactly.
+\item \textbf{Area preservation.} The ellipse
+      $u^2/q_{\rm maj}^2 + v^2/q_{\rm min}^2 = 1$ has area
+      $\pi q_{\rm maj}q_{\rm min}$. The choice
+      $\Reff = \xi\sqrt{q_{\rm maj}q_{\rm min}}$ ensures that the
+      $\Reff = R_0$ contour bounds the same area
+      $\pi R_0^2$ as the spherical contour at radius $R_0$.
+\item \textbf{Diagonalisation continuity.} The eigendecomposition of
+      $M$ has a sign ambiguity in the eigenvectors; we resolve it by
+      sorting eigenvalues ascending and reading the major-axis
+      orientation off $\mathbf{v}_1$. The position angle returned by
+      \texttt{project\_ellipsoid} can therefore differ from a previous
+      implementation's by $\pi$ -- harmless because
+      $\gamma e^{2 i (\phi+\pi)} = \gamma e^{2 i \phi}$.
+\item \textbf{Numerical guards.} The Gram--Schmidt direction $\unitvec{e}_1$
+      becomes ill-conditioned when the LOS is within
+      $\sim 10^{-10}\,{\rm rad}$ of the $a$-axis. In that case the code
+      uses $\unitvec{a}=(0,1,0)$ as a fallback. The NFW shear is
+      evaluated at $\max(\Reff, 10^{-4}\,r_s)$ to avoid the inner-radius
+      singularity.
+\item \textbf{LOS-only triaxiality bias.} Because the radial profile is
+      not modified, the bias produced by this simulator on a stacked
+      $\DS$ relative to a spherical NFW is dominated by the
+      $\sqrt{q_{\rm maj}\,q_{\rm min}}$ rescaling of the radius and the
+      $\Sigma_{\rm crit}$ amplitude. The simulator is therefore an
+      \emph{LOS-projection-only} model: it captures the dominant
+      systematic but is not a substitute for stacking a 3D triaxial NFW
+      with a proper triaxial $\Sigma$ template at $r \ll r_s$.
+\end{itemize}
+
+\section{Code anchors}
+
+\begin{tabular}{ll}
+\verb|sample_triaxial_shapes|         & Sections~\ref{sec:draw}--\ref{sec:proj} \\
+\verb|project_ellipsoid|              & Section~\ref{sec:proj} \\
+\verb|triaxial_NFW_wcs_cluster_shear| & Sections~\ref{sec:effr} and \eqref{eq:tri-shear} \\
+\verb|apply_triaxial_NFW_shear_region| & Section~\ref{sec:apply} \\
+\verb|NFW_tangential_shear|, \verb|gNFW| & Equation~\eqref{eq:gammat-sph} \\
+\verb|equatorial_to_polar|            & Vincenty separation/azimuth, step 2 of §\ref{sec:apply} \\
+\verb|add_shears|                     & ellipticity addition, step 7 of §\ref{sec:apply} \\
+\end{tabular}
+
+\end{document}

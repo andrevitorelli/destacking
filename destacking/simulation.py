@@ -353,3 +353,398 @@ def sample_des_y3_source_z(N, rng, z_min=0.0, z_max=2.5,
     cdf    = np.cumsum(pdf); cdf /= cdf[-1]
     u      = rng.uniform(0, 1, N)
     return np.interp(u, cdf, z_grid)
+
+
+# ---------------------------------------------------------------------------
+# Survey simulation pipeline (moved from scripts/gamma_scan.py)
+# ---------------------------------------------------------------------------
+
+import multiprocess as _mp
+from dataclasses import dataclass
+
+from scipy.interpolate import interp1d as _interp1d
+
+import xlensing.cosmo as _xlc
+import xlensing.sims as _xlsims
+from xlensing.data import bootstrap_signal, metacal_cluster_lensing
+from xlensing.sims import (
+    apply_triaxial_NFW_shear_region,
+    make_simple_random_cat,
+    sample_triaxial_shapes,
+)
+
+from destacking.utils import deterministic_seed as _seed
+
+# NB: destacking.model imports from this module (_pivot_from_delta_m), so the
+# McClintock pivot constants are imported lazily inside build_truth_catalog
+# to avoid a circular import at load time.
+
+
+@dataclass
+class SimulationConfig:
+    """Everything the survey-simulation pipeline needs to know.
+
+    Mirrors the configuration constants of scripts/gamma_scan.py so the
+    pipeline can be driven by any script (simulation scans today, real-data
+    ingestion tools tomorrow) without reading that script's globals.
+    """
+    # Sample
+    n_clusters:      int
+    z_cluster_range: tuple            # (z_min, z_max) of the cluster sample
+    logm_range:      tuple            # oversampling range for the truth draw
+    lambda_min:      float            # richness selection threshold
+    delta_m_ref:     float            # magnitude-gap pivot [mag]
+    # Source survey
+    density:     float                # source density [gal/arcmin^2]
+    shape_noise: float                # per-component ellipticity RMS
+    width_rad:   float                # aperture half-width [rad]
+    z_src_range: tuple                # (z_min, z_max) for sources
+    z_src_alpha: float                # Smail n(z) parameters
+    z_src_beta:  float
+    z_src_z0:    float
+    # Physics switches
+    spherical:    bool
+    miscentering: bool
+    f_cen:         float              # fraction of correctly centred clusters
+    sigma_off_mpc: float              # Rayleigh scale of the offset [Mpc]
+    # Measurement
+    radii:           np.ndarray       # bin-centre radii [Mpc]
+    bin_limits:      np.ndarray       # (n_bins, 2) bin edges [Mpc]
+    n_cov_bootstrap: int              # galaxy bootstrap draws per cluster
+    # Execution
+    n_workers: int = 15
+
+    @property
+    def n_bins(self):
+        return len(self.radii)
+
+
+def build_truth_catalog(gamma_true, g_idx, cfg):
+    # WaZP-matched truth: oversample at logM in cfg.logm_range, then keep the
+    # rows passing Lambda>cfg.lambda_min and dm>0 until n_clusters pass the
+    # cut.  The McClintock+18 Lambda-inversion is run inside make_test_data;
+    # we reuse it here purely as a selection filter and discard the noisy
+    # dSigma vectors that step also produces.
+    from astropy.table import vstack as _vstack
+
+    from destacking.model import _MC_M_PIVOT_LOG, _MC_Z_REF
+
+    batch_size = max(int(cfg.n_clusters / 0.35), 5000)
+    selected   = []
+    n_sel      = 0
+    batch      = 0
+    while n_sel < cfg.n_clusters:
+        batch += 1
+        truth_b = generate_truth_catalog(
+            batch_size,
+            z_range=cfg.z_cluster_range,
+            logM_range=cfg.logm_range,
+            delta_m_gamma=0.0, scatter_logc=0.0,
+            seed=_seed(g_idx, batch),
+        )
+        cluster_obs_b, _, _ = make_test_data(
+            truth_b, cfg.radii, poisson_richness=True,
+            seed=_seed(g_idx, 50_000 + batch),
+        )
+        truth_b["Lambda"] = cluster_obs_b["Lambda"]
+        keep = ((truth_b["Lambda"]  > cfg.lambda_min)
+              & (truth_b["delta_m"] > 0.0)
+              & np.isfinite(truth_b["delta_m"])
+              & (truth_b["z"] < cfg.z_cluster_range[1])
+              & (truth_b["z"] >= cfg.z_cluster_range[0]))
+        truth_b = truth_b[keep]
+        selected.append(truth_b)
+        n_sel += len(truth_b)
+    truth = _vstack(selected)[:cfg.n_clusters]
+
+    dm_s    = np.asarray(truth["delta_m"])
+    logdm_s = np.log10(np.maximum(dm_s, 1e-6) / cfg.delta_m_ref)
+    truth["concentration"] = np.asarray(truth["concentration"]) * 10.0 ** (
+        gamma_true * logdm_s
+    )
+
+    logM_s  = np.log10(truth["M_halo"])
+    logc_s  = np.log10(truth["concentration"])
+    logz1_s = np.log10((1.0 + truth["z"]) / (1.0 + _MC_Z_REF))
+    X = np.column_stack(
+        [np.ones(cfg.n_clusters), logM_s - _MC_M_PIVOT_LOG, logz1_s, logdm_s]
+    )
+    coeffs, *_ = np.linalg.lstsq(X, logc_s, rcond=None)
+    return truth, {
+        "c0_true":        float(10.0 ** coeffs[0]),
+        "alpha_true":     float(coeffs[1]),
+        "beta_true":      float(coeffs[2]),
+        "gamma_true_ols": float(coeffs[3]),
+    }
+
+
+def compute_triaxial_shapes(truth, g_idx):
+    rng_tri = np.random.default_rng(_seed(g_idx, 10))
+    return sample_triaxial_shapes(
+        truth["z"], truth["M_halo"],
+        ba_range=(0.5, 1.0), ca_lo=0.3, isotropic_los=True, rng=rng_tri,
+    )
+
+
+def compute_miscentering(g_idx, cfg):
+    if not cfg.miscentering:
+        # All clusters perfectly centred — used for the no-miscentering
+        # sensitivity test selected via miscentering: false in YAML.
+        return (np.zeros(cfg.n_clusters, dtype=bool),
+                np.zeros(cfg.n_clusters),
+                np.zeros(cfg.n_clusters))
+    rng_mis     = np.random.default_rng(_seed(g_idx, 20))
+    is_mis      = rng_mis.uniform(0, 1, cfg.n_clusters) > cfg.f_cen
+    off_mag_mpc = np.where(
+        is_mis, rng_mis.rayleigh(scale=cfg.sigma_off_mpc, size=cfg.n_clusters),
+        0.0,
+    )
+    phi_mis = rng_mis.uniform(0, 2 * np.pi, cfg.n_clusters)
+    return is_mis, off_mag_mpc, phi_mis
+
+
+# Worker state shared with _process_cluster through fork (set by
+# simulate_lensing immediately before the pool dispatch).
+_CFG         = None
+_TRUTH       = None
+_SHAPES      = None
+_OFF_MAG_MPC = None
+_PHI_MIS     = None
+_DA_FAST     = None
+_G_IDX_SIM   = 0
+
+
+def _process_cluster(i):
+    """Simulate and measure the lensing signal of one cluster, end to end.
+
+    Runs inside a ``multiprocess.Pool`` worker.  All shared inputs come
+    from the module globals set by :func:`simulate_lensing` before the
+    pool dispatch (``_CFG``, ``_TRUTH``, ``_SHAPES``, ``_OFF_MAG_MPC``,
+    ``_PHI_MIS``, ``_DA_FAST``, ``_G_IDX_SIM``) — the function's only
+    argument is the cluster index, so ``pool.imap`` can stream over
+    ``range(cfg.n_clusters)``.
+
+    Pipeline stages
+    ---------------
+    1. Draw a random source-galaxy catalog around the cluster (Poisson
+       density ``cfg.density`` gal/arcmin^2, aperture half-width
+       ``cfg.width_rad``).
+    2. Assign DES Y3-like source redshifts (Smail distribution), lognormal
+       metacal responses, and intrinsic shapes (per-component Gaussian
+       with RMS ``cfg.shape_noise``, redrawn until |e| < 1).
+    3. Cut to sources behind the cluster (z_s > 1.1 z_l + 0.2, matching the
+       metacal selection inside xlensing).
+    4. Shear the sources with the triaxial NFW model using the cluster's
+       true (M, c, shape, orientation), scaling each galaxy's shear by its
+       metacal response so the response-corrected estimator is unbiased;
+       ``cfg.spherical`` collapses the triaxial code to the spherical
+       Wright-Brainerd profile by setting b = c = a.
+    5. Measure from a possibly miscentered position (offset ``_OFF_MAG_MPC``
+       at angle ``_PHI_MIS``) via ``metacal_cluster_lensing``.
+    6. Estimate the per-cluster data vector and covariance with
+       ``bootstrap_signal`` — the same estimator for both, no boost
+       correction, no noise floor.  Bins that fail the bootstrap (too few
+       galaxies for a finite, positive variance) are NaN in the data vector
+       and are dropped from this cluster's likelihood by cholog_gaussian.
+
+    Reproducibility: every random stage uses ``_seed(g_idx, offset + i)``
+    with disjoint offset blocks (1000 shapes, 4000 positions, 5000
+    redshifts, 6000 responses), so any cluster can be regenerated
+    identically without running the others.
+
+    Returns
+    -------
+    (i, dv, cov, bg_arr) : tuple
+        ``i``      — the cluster index (echoed back for imap bookkeeping).
+        ``dv``     — (n_bins,) bootstrap-mean dSigma_t [Msun/pc^2], NaN in
+                     failed bins.
+        ``cov``    — (n_bins, n_bins) bootstrap covariance; failed
+                     rows/columns hold inert identity placeholders that
+                     the likelihood never reads.
+        ``bg_arr`` — (6, N_src) float32 stake (Sigma_crit, e_t, e_x, W, R, M)
+                     kept so notebooks can re-stack the raw signal.
+    (i, None, None, None)
+        Cluster rejected: fewer than 20 sources behind it, fewer than 20
+        inside the measurement aperture, or no bin survived the bootstrap.
+        The caller leaves its data vector all-NaN, so it is skipped by the
+        likelihood rather than contributing zeros.
+    """
+    cfg = _CFG
+    # True cluster properties for index i (gamma enters through _TRUTH's
+    # concentrations, generated upstream by build_truth_catalog).
+    z_i = float(_TRUTH["z"][i])
+    M_i = float(_TRUTH["M_halo"][i])
+    c_i = float(_TRUTH["concentration"][i])
+    a_i = _SHAPES["r_vir"][i]
+    g_i = _G_IDX_SIM
+
+    # Stage 1 — random source positions (metacal catalog layout:
+    # ra, dec, z, e1, e2, R11, R12, R21, R22, w).  Shapes/z/responses are
+    # placeholders here and get overwritten below with their own streams.
+    gal_i  = make_simple_random_cat(
+        cfg.density, cfg.width_rad, cfg.z_src_range, shape_noise=0.0,
+        seed=_seed(g_i, 4000 + i), poisson_density=True,
+    ).T
+    n_gals = len(gal_i)
+
+    # Stage 2a — source redshifts from the DES Y3 Smail fit.
+    rng_src = np.random.default_rng(_seed(g_i, 5000 + i))
+    gal_i[:, 2] = sample_des_y3_source_z(
+        n_gals, rng_src,
+        z_min=cfg.z_src_range[0], z_max=cfg.z_src_range[1],
+        alpha=cfg.z_src_alpha, beta=cfg.z_src_beta, z0=cfg.z_src_z0,
+    )
+
+    # Stage 2b — diagonal metacal response tied to a lognormal size proxy
+    # (small/noisy galaxies respond less); off-diagonal terms zero.
+    rng_resp = np.random.default_rng(_seed(g_i, 6000 + i))
+    sizes    = rng_resp.lognormal(mean=np.log(0.5), sigma=0.5, size=n_gals)
+    R_RESP   = np.clip(1.0 - (sizes / 1.5) ** 2, 0.05, 0.99)
+    gal_i[:, 5] = R_RESP
+    gal_i[:, 6] = 0.0
+    gal_i[:, 7] = 0.0
+    gal_i[:, 8] = R_RESP
+
+    # Stage 2c — intrinsic shapes: per-component Gaussian with |e| < 1
+    # enforced by redraw.  ngmix's GPriorBA sampler is unreliable at small
+    # sigma (its rejection sampling floors at rms ~ 0.04) and its (1-g^2)^2
+    # truncation shifts the delivered rms below sigma, so we draw directly:
+    # cfg.shape_noise is the per-component ellipticity RMS by construction.
+    rng_sh = np.random.default_rng(_seed(g_i, 1000 + i))
+    e1 = rng_sh.normal(0.0, cfg.shape_noise, n_gals)
+    e2 = rng_sh.normal(0.0, cfg.shape_noise, n_gals)
+    bad = e1 ** 2 + e2 ** 2 >= 1.0
+    while bad.any():
+        n_bad = int(bad.sum())
+        e1[bad] = rng_sh.normal(0.0, cfg.shape_noise, n_bad)
+        e2[bad] = rng_sh.normal(0.0, cfg.shape_noise, n_bad)
+        bad = e1 ** 2 + e2 ** 2 >= 1.0
+    gal_i[:, 3] = e1
+    gal_i[:, 4] = e2
+
+    # Stage 3 — keep only sources behind the cluster.  Same cut as the
+    # metacal path in xlensing, applied early so we only shear survivors.
+    mc_mask = gal_i[:, 2] > 1.1 * z_i + 0.2
+    gal_mc  = gal_i[mc_mask]
+    if len(gal_mc) < 20:
+        return i, None, None, None
+
+    # Stage 4 — inject the NFW shear.  Cluster tuple layout expected by
+    # apply_triaxial_NFW_shear_region:
+    # (ra, dec, z, M200, c200, a, b, c, theta_los, phi_los), axes in Mpc.
+    # The per-galaxy metacal response (col 5; R11 = R22, off-diag 0) scales
+    # the injected shear so the response-corrected signal() estimator
+    # recovers the true amplitude — without it every dSigma comes out
+    # inflated by 1/<Rt> ~ 1.2.
+    resp_i = gal_mc[:, 5]
+    if cfg.spherical:
+        # Pure spherical NFW: set b=c=a so the projected ellipse degenerates
+        # to a circle and the triaxial-shear pipeline collapses analytically
+        # to the Wright-Brainerd 1999 spherical-NFW formula.  This reuses the
+        # fast vectorised path of apply_triaxial_NFW_shear_region rather than
+        # the per-galaxy Python loop in apply_NFW_shear_region.
+        cluster_arr = [
+            0.0, 0.0, z_i, M_i, c_i, a_i,
+            a_i, a_i,                                # b = c = a -> sphere
+            _SHAPES["theta_los"][i], _SHAPES["phi_los"][i],
+        ]
+        gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc,
+                                                      response=resp_i)
+    else:
+        cluster_arr = [
+            0.0, 0.0, z_i, M_i, c_i, a_i,
+            _SHAPES["q_ba"][i] * a_i, _SHAPES["q_ca"][i] * a_i,
+            _SHAPES["theta_los"][i], _SHAPES["phi_los"][i],
+        ]
+        gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc,
+                                                      response=resp_i)
+
+    # Stage 5 — measure from the (possibly miscentered) observed position.
+    # Column reorder puts the weight (col 9) after the shapes, matching the
+    # metacal_cluster_lensing source layout
+    # (ra, dec, z, e1, e2, w, R11, R12, R21, R22).  The true center is at
+    # the origin; the offset (drawn in Mpc upstream) converts to radians
+    # through the angular diameter distance.
+    sources_mc = gal_sheared[:, [0, 1, 2, 3, 4, 9, 5, 6, 7, 8]]
+    DA_i       = _DA_FAST(0, z_i)
+    off_rad_i  = _OFF_MAG_MPC[i] / DA_i
+    cen_ra_i   = off_rad_i * np.cos(_PHI_MIS[i])
+    cen_dec_i  = off_rad_i * np.sin(_PHI_MIS[i])
+
+    bg = metacal_cluster_lensing((cen_ra_i, cen_dec_i, z_i), sources_mc.T,
+                                  cfg.width_rad * DA_i)
+    if bg["Count"] < 20:
+        return i, None, None, None
+
+    # Standard xlensing stake layout: rows (Sigma_crit, e_t, e_x, W, R, M).
+    stake = np.array([
+        bg["Critical Density"], bg["Tangential Shear"], bg["Cross Shear"],
+        bg["Weights"], bg["Radial Distance"], bg["Mult. Bias"],
+    ])
+
+    # Stage 6 — data vector and covariance from the same bootstrap estimator
+    # (signal(), no boost correction) so both are consistent with the NFW
+    # model in the likelihood, which also does not include a boost.
+    # bootstrap_signal handles failure per bin: bins without enough galaxies
+    # for a finite, positive bootstrap variance come back as NaN.  Those NaN
+    # entries stay in the data vector so cholog_gaussian drops exactly the
+    # failed bins from this cluster's likelihood — no noise floor anywhere.
+    sigmas, sigmas_cov, _, _ = bootstrap_signal(
+        stake, cfg.bin_limits, Nboot=cfg.n_cov_bootstrap
+    )
+    valid_bins = np.isfinite(sigmas)
+    if not valid_bins.any():
+        return i, None, None, None
+    dv = sigmas
+
+    # Failed bins get placeholder identity entries in the stored covariance;
+    # they are never used because cholog_gaussian masks on NaN in dv.
+    cov = np.where(np.isfinite(sigmas_cov), sigmas_cov, 0.0)
+    cov[~valid_bins, ~valid_bins] = 1.0
+
+    # Float32 bg for storage; downstream stacked_signal doesn't need precision.
+    bg_arr = stake.astype("float32")
+    return i, dv, cov, bg_arr
+
+
+def simulate_lensing(truth, shapes, mis, g_idx, cfg):
+    global _CFG, _TRUTH, _SHAPES, _OFF_MAG_MPC, _PHI_MIS, _DA_FAST, _G_IDX_SIM
+
+    z_tab    = np.linspace(0.0, 3.0, 5000)
+    chi_tab  = _xlc.cosmology.comoving_distance(z_tab).value
+    chi_of_z = _interp1d(z_tab, chi_tab, kind="linear",
+                         bounds_error=False, fill_value="extrapolate")
+
+    def DA_fast(z1, z2):
+        z2_a = np.atleast_1d(np.asarray(z2, dtype=float))
+        res  = (chi_of_z(z2_a) - float(chi_of_z(float(z1)))) / (1.0 + z2_a)
+        return float(res[0]) if np.ndim(z2) == 0 else res
+
+    _xlc.DA    = DA_fast
+    _xlsims.DA = DA_fast
+    _CFG          = cfg
+    _TRUTH        = truth
+    _SHAPES       = shapes
+    _, _OFF_MAG_MPC, _PHI_MIS = mis
+    _DA_FAST      = DA_fast
+    _G_IDX_SIM    = g_idx
+
+    # Clusters that fail _process_cluster keep an all-NaN data vector, so
+    # cholog_gaussian skips them entirely (per-bin NaN masking).  The identity
+    # covariance is a placeholder that is never read for skipped entries.
+    data_vectors = np.full((cfg.n_clusters, cfg.n_bins), np.nan)
+    cov_matrices = np.zeros((cfg.n_clusters, cfg.n_bins, cfg.n_bins))
+    for i in range(cfg.n_clusters):
+        np.fill_diagonal(cov_matrices[i], 1.0)
+    bgs          = [None] * cfg.n_clusters
+
+    with _mp.Pool(cfg.n_workers) as pool:
+        for idx, dv, cov, bg in pool.imap(
+            _process_cluster, range(cfg.n_clusters), chunksize=10
+        ):
+            if dv is not None:
+                data_vectors[idx] = dv
+                cov_matrices[idx] = cov   # full (n_bins, n_bins) matrix
+                bgs[idx]          = bg
+
+    return data_vectors, cov_matrices, bgs

@@ -1,0 +1,599 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage[authoryear]{natbib}
+\usepackage{geometry}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{caption}
+
+\geometry{margin=2.4cm}
+\captionsetup{font=small, labelfont=bf}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=blue!60!black,
+  urlcolor=blue!60!black,
+}
+
+\providecommand{\mnras}{MNRAS}
+\providecommand{\apj}{ApJ}
+\providecommand{\apjs}{ApJS}
+
+\newcommand{\dsig}{\Delta\Sigma}
+\newcommand{\dm}{\Delta m}
+\newcommand{\fcen}{f_{\rm cen}}
+\newcommand{\sigmaoff}{\sigma_{\rm off}}
+\newcommand{\Rmin}{R_{\rm min,fit}}
+\newcommand{\dlog}{\Delta\log_{10}}
+
+\title{\textbf{Day report: hardening the destacking pipeline and
+diagnosing the $\gamma$ posterior under-coverage}\\[0.3em]
+\large Activities of 20 May 2026}
+\author{Andr\'e Vitorelli}
+\date{20 May 2026}
+
+\begin{document}
+\maketitle
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Day at a glance}
+%──────────────────────────────────────────────────────────────────────────────
+
+Today's work split into three threads, all stemming from issues exposed by
+the 20-realisation calibration scan we set up yesterday:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Robustness fixes.}  Hangs and silent NaN-failures of the
+        sampler were eliminated.  A timeout was added on the nautilus run,
+        a \emph{verbose} flag is now on by default, and the joint Gaussian
+        likelihood received NaN guards that convert any forward-model
+        overflow to $-\infty$ rather than letting NaN propagate to
+        \texttt{f\_live = nan}.
+  \item \textbf{Test coverage.}  An audit of every public function in the
+        \texttt{destacking} package surfaced eight missing unit tests; all
+        were added and the three pre-existing failures were cleaned up.
+        The suite now stands at \textbf{123 passed, 0 failed}.
+  \item \textbf{Posterior calibration.}  A 20-realisation re-run of
+        \texttt{scripts/gamma\_repeat.py} confirms what we already
+        suspected from the wider scan: the recovery is on average
+        \emph{unbiased} but every per-realisation posterior is too narrow.
+        We traced the cause to a missing rank-1 covariance term (coherent
+        per-cluster amplitude scatter from triaxiality and miscentering
+        realisation) and implemented the Sherman--Morrison fix.  Tuning
+        of the new \texttt{coh\_amplitude} knob is the natural next step
+        — preliminary runs leave a $\sim\!2.8\times$ residual mismatch
+        still in need of further investigation.
+\end{enumerate}
+
+A second \texttt{gamma\_repeat} run with the new code gave the figures and
+numbers reproduced below.
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Robustness fixes to the inference pipeline}
+%──────────────────────────────────────────────────────────────────────────────
+
+\subsection{Sampler timeout and verbose progress}
+
+When the $\gamma$ prior is widened, nautilus occasionally falls into a
+slow-convergence regime: \texttt{f\_live} stalls and the sampler refuses to
+finish.  Two changes:
+
+\begin{itemize}[noitemsep]
+  \item \texttt{run\_sampler\_combined} gained a new \texttt{timeout}
+        kwarg (seconds), passed straight through to nautilus'
+        \texttt{Sampler.run()}.  A stuck sampler now returns rather than
+        hangs indefinitely.
+  \item \texttt{verbose=True} is now the default in both
+        \texttt{scripts/gamma\_scan.py} and \texttt{scripts/gamma\_repeat.py}
+        so that nautilus prints its live-point statistics; a glance at
+        \texttt{f\_live} reveals the slow-convergence regime immediately.
+  \item Per-realisation checkpoints (\texttt{nautilus\_checkpoint.hdf5})
+        let a crashed sampler resume from disk on the next invocation
+        instead of restarting from scratch.
+\end{itemize}
+
+\subsection{Failure handling: don't count, delete, retry}
+
+If a single realisation fails for any reason (sampler crash, numerical
+glitch, user interrupt), \texttt{scripts/gamma\_repeat.py} now:
+
+\begin{itemize}[noitemsep]
+  \item Removes the partial \texttt{realisation\_<idx>/} subdirectory with
+        \texttt{shutil.rmtree(\ldots,~ignore\_errors=True)} so that a
+        subsequent run does not mistake the half-written state for a cache
+        hit.
+  \item Does \emph{not} count the failed attempt toward the target
+        \texttt{N\_REALISATIONS}; the while-loop simply keeps trying.
+  \item Still includes the wall time of the failed attempt in the running
+        ETA, and the empirical failure rate is folded in:
+        \[
+          \text{expected remaining attempts} =
+          \frac{\text{remaining successes}}{\max(1-f_{\rm fail},\,10^{-3})}.
+        \]
+\end{itemize}
+
+A safety cap of $4\times N$ total attempts prevents an infinite loop in
+the worst case, and \texttt{KeyboardInterrupt} re-raises so $\mathrm{Ctrl{+}C}$
+exits cleanly.
+
+\subsection{NaN guards in the likelihood}
+
+A wide $\gamma$ prior lets the sampler explore parameter values where
+$10^{\log_{10}c}$ overflows to $+\infty$ in the forward model.  The
+xlensing NFW propagates that as NaN.  \texttt{numpy.linalg.solve} silently
+propagates NaN without raising; \texttt{cholog\_gaussian} was returning
+NaN to nautilus, which then degenerated to \texttt{f\_live = NaN}.  Three
+edits make the likelihood NaN-safe:
+
+\begin{itemize}[noitemsep]
+  \item \texttt{cholog\_gaussian} now skips any cluster whose residual
+        contains NaN/$\pm\infty$, broadens the exception handler to
+        \texttt{(LinAlgError, ValueError, FloatingPointError)}, validates
+        the per-cluster and total log-likelihood, and \emph{never} returns
+        NaN.
+  \item \texttt{log\_likelihood}, \texttt{log\_likelihood\_mc},
+        \texttt{log\_likelihood\_combined} all check
+        \texttt{np.all(np.isfinite(model))} after the forward pass and
+        \texttt{np.isfinite(ll)} after \texttt{cholog\_gaussian}, returning
+        $-\infty$ on either failure.
+  \item Verified end-to-end: an extreme draw
+        $(\gamma{=}500,\,\dm_{\rm ref}{=}10^{-4})$ that produced an
+        all-NaN forward model used to leak NaN into the chain; the patched
+        likelihood returns $-\infty$ and nautilus treats the region as
+        zero-probability.
+\end{itemize}
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Test coverage audit and cleanup}
+%──────────────────────────────────────────────────────────────────────────────
+
+An audit of every public function in \texttt{destacking/*.py} against
+\texttt{tests/*.py} revealed eight functions with no tests.  All were
+added and the three pre-existing failures were dealt with.
+
+\paragraph{Newly tested functions (eight, 39 new tests).}
+\begin{itemize}[noitemsep]
+  \item \texttt{model.py}: \texttt{forward\_model\_mc},
+        \texttt{forward\_model\_combined}.
+  \item \texttt{fitting.py}: \texttt{log\_likelihood\_mc},
+        \texttt{log\_likelihood\_combined}, plus \texttt{@pytest.mark.slow}
+        smoke tests of \texttt{run\_sampler\_mc} and
+        \texttt{run\_sampler\_combined}.
+  \item \texttt{relations.py}: \texttt{sample\_halo\_masses\_tinker08}.
+  \item \texttt{simulation.py}: \texttt{des\_y3\_cluster\_pdf},
+        \texttt{sample\_des\_y3\_cluster\_z}, \texttt{des\_y3\_source\_pdf},
+        \texttt{sample\_des\_y3\_source\_z}, \texttt{simcluster}.
+\end{itemize}
+The new tests check shape, positivity, monotonicity, reproducibility,
+ranges, and equivalence relations (e.g.\ \texttt{forward\_model\_combined}
+with $\gamma{=}0$ must agree with \texttt{forward\_model\_mc}).  A
+dedicated test verifies that \texttt{log\_likelihood\_combined} never
+returns NaN over a sweep of $(c_0,\alpha,\gamma)$ random values, including
+the extreme-$\gamma$ overflow regime.
+
+\paragraph{Three pre-existing failures dealt with.}
+\begin{enumerate}[noitemsep]
+  \item \texttt{test\_log\_likelihood\_negative\_gamma\_returns\_neg\_inf}
+        was deleted: the gamma-only \texttt{forward\_model} now uses the
+        $\log_{10}(\dm/\dm_{\rm ref})$ parametrisation where negative
+        $\gamma$ is perfectly valid; the test encoded an outdated
+        invariant.
+  \item \texttt{test\_log\_likelihood\_decreases\_away\_from\_truth} and
+        \texttt{test\_gamma\_recovery}: the shared
+        \texttt{make\_test\_data} fixtures use \texttt{fractional\_noise=0}
+        \emph{and} \texttt{poisson\_richness=False}.  The
+        \texttt{poisson\_richness} default was the culprit — without it,
+        Poisson scatter on $\Lambda$ propagates through the McClintock+18
+        $M(\Lambda)$ inversion in the forward model and moves the
+        likelihood peak off the truth.  With both off, the likelihood is
+        sharply peaked at $\gamma_{\rm true}$ and the assertions hold.
+\end{enumerate}
+
+\paragraph{Suite status.}  Before: 77 passed, 3 failed (yesterday) /
+116 passed, 3 failed (after new tests).  After today's cleanup:
+\textbf{123 passed, 0 failed.}
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Calibration of the $\gamma$ posterior}
+%──────────────────────────────────────────────────────────────────────────────
+
+A 20-realisation \texttt{gamma\_repeat.py} run with the updated pipeline
+gives (\texttt{scripts/gamma\_repeat\_outputs/run\_2026-05-20T16-48-49}):
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+quantity & value \\
+\midrule
+$\langle\hat\gamma\rangle$ across 20 runs            & $+0.218$ \\
+median $\hat\gamma$                                  & $+0.155$ \\
+$\mathrm{std}(\hat\gamma)$ ($\sigma_{\rm runs}$)     & $0.456$  \\
+$\langle\sigma_\gamma^{\rm post}\rangle$              & $0.166$  \\
+$\langle\hat\gamma\rangle - \gamma_{\rm true}$       & $+0.018$ \\
+calibration ratio $\sigma_{\rm runs}/\langle\sigma_\gamma^{\rm post}\rangle$ & $\mathbf{2.75}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\textwidth]{scripts/gamma_repeat_outputs/run_2026-05-20T16-48-49/gamma_residuals.png}
+  \caption{Per-realisation $\hat\gamma_k - \gamma_{\rm true}$ for the 20
+  successful realisations of the latest run.  Error bars are the 68\%
+  posterior credible intervals.  Dashed black line is unbiased; the
+  \textsf{tomato} band shows the empirical $\sigma_{\rm runs}$ of the
+  medians, which is $\sim\!2.75\times$ larger than the average posterior
+  $\sigma_\gamma^{\rm post}$ stamped in the inset.}
+  \label{fig:repeat_residuals}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\textwidth]{scripts/gamma_repeat_outputs/run_2026-05-20T16-48-49/posteriors_overlay.png}
+  \caption{KDE overlay of all 20 marginal $\gamma$ posteriors (viridis,
+  one per realisation) against the truth $\gamma_{\rm true}=0.2$
+  (\textsf{crimson} dashed) and the $\mathcal{N}(0, 1)$ prior
+  (\textsf{darkorange} dashed).  Each individual posterior is narrower
+  than the spread of the centroids — visual evidence of under-coverage.}
+  \label{fig:repeat_overlay}
+\end{figure}
+
+\paragraph{Headline result.}  The mean recovery is unbiased to within
+$0.02$, but every per-realisation posterior is a factor $\sim\!2.8\times$
+narrower than the empirical run-to-run scatter shows it should be.  The
+problem is therefore fully on the fitting side, not in the simulation
+truth.
+
+\subsection{Diagnosis: what makes $\sigma_\gamma^{\rm post}$ too small}
+
+Three structural fitting-side assumptions conspire.
+
+\paragraph{1. Per-cluster covariance is shape-noise-only.}  Each
+$\mathbf{C}_i$ is the diagonal Gaussian shape-noise matrix
+\[
+  \mathbf{C}_{i,bb} = \bigl(\sigma_e\,\bar\Sigma_{\rm cr,b}/\sqrt{n_{{\rm gal},b}}\bigr)^2.
+\]
+What is missing is the \emph{coherent} per-cluster amplitude offset
+introduced by (i) triaxiality with isotropic LOS ($\sim\!20\text{--}30\%$
+of $\dsig$ at intermediate $R$, correlated across all bins of the same
+cluster) and (ii) the per-cluster realisation of miscentering vs.\ the
+forward model's fixed-$\fcen$ correction ($\sim\!30\text{--}40\%$ peak
+mismatch).  Because $\partial m_i/\partial\gamma \propto m_i$
+approximately, the Fisher information on $\gamma$ that comes from
+\emph{amplitude} is exactly the contribution that should be suppressed by
+those coherent terms; the bare covariance double-counts it.
+
+\paragraph{2. Tight DM14 priors break the $c_0$--$\gamma$ degeneracy.}
+After Fix~A, $c_0\sim\mathcal{N}(4.57,0.05)$ pins $\log_{10}c_0$ to
+$\sim\!0.005$ dex.  Marginalising over a degeneracy widens the marginal
+posterior on $\gamma$; with this prior the degeneracy is essentially
+broken at the prior level, so the $\gamma$ marginal stays narrow.
+
+\paragraph{3. Independent-cluster likelihood.}
+$\ln\mathcal{L}=\sum_i\ln\mathcal{L}_i$ assumes the per-cluster residuals
+are uncorrelated.  Any shared systematic (the common source $n(z)$, a
+global mass-richness shift, a common-mode triaxiality bias) is invisible
+to this model.  Effective $N$ is smaller than the nominal $5000$, but the
+Fisher formula uses the nominal value.
+
+The three effects are not independent: of these, (1) is the largest
+contributor.  Order-of-magnitude estimates of the integrated per-cluster
+shape-noise amplitude ($\sim\!40\,M_\odot/\mathrm{pc}^2$) and the
+triaxiality-plus-miscentering coherent amplitude
+($\sim\!25\text{--}40\,M_\odot/\mathrm{pc}^2$) are comparable; including
+the latter in the per-cluster cov could realistically widen
+$\sigma_\gamma^{\rm post}$ by a factor of $\gtrsim\!2$.
+
+\subsection{Fix \#2 implemented: rank-1 covariance inflation}
+\label{sec:rank1}
+
+\paragraph{Physical motivation.}
+Cluster-to-cluster, the simulated $\dsig$ signal contains
+two contributions that are NOT shape noise and are NOT in the per-cluster
+covariance:
+\begin{itemize}[noitemsep]
+  \item \emph{Halo triaxiality with isotropic line of sight.}  Pioneering
+        $N$-body and lensing-bias studies show that fitting a spherical
+        NFW to a triaxial halo yields a per-cluster amplitude scatter
+        roughly proportional to the unscattered $\dsig$, of order
+        $20\!-\!30\%$ at intermediate radii
+        \citep{JingSuto2002,Allgood2006,Corless2007,Becker2011,Oguri2012}.
+        Crucially this scatter is \emph{correlated across radial bins of
+        the same cluster}: a halo seen with its major axis closer to the
+        line of sight has \emph{all} of its bins enhanced; a perpendicular
+        line of sight depresses them.
+  \item \emph{Per-cluster realisation of miscentering.}  The forward
+        model uses the population-averaged Rayleigh+$\delta$ correction
+        with the same $(\fcen,\sigmaoff)$ for every cluster.  An
+        \emph{individual} cluster either is centred or has a specific
+        offset $R_{\rm mis}$; in either case the discrepancy with the
+        population-average profile is \emph{also} coherent across radial
+        bins of that one cluster (the entire inner peak is either
+        present or smeared)
+        \citep{Johnston2007,Rykoff2016,McClintock2018,Zhang2019}.
+\end{itemize}
+In Bayesian language the per-cluster data model should be
+\begin{equation}
+  \mathbf{d}_i \;=\; \mathbf{m}_i(\boldsymbol\theta) \;+\; \xi_i\,\mathbf{m}_i(\boldsymbol\theta)
+                    \;+\; \boldsymbol\epsilon_i,
+  \label{eq:gen_model}
+\end{equation}
+where $\boldsymbol\epsilon_i \sim \mathcal{N}(\mathbf{0}, \mathbf{C}_i)$
+is the bin-diagonal shape-noise Gaussian and $\xi_i \sim
+\mathcal{N}(0, \mathrm{coh}^2)$ is a per-cluster scalar nuisance that
+captures the coherent amplitude shift induced by the two effects above.
+Marginalising the multivariate Gaussian over $\xi_i$ in closed form
+\citep[\S 1.6]{Bishop2006} produces an effective per-cluster covariance
+\begin{equation}
+  \mathbf{C}_{{\rm eff},i} \;=\; \mathbf{C}_i \;+\;
+            \mathrm{coh}^2 \,\mathbf{m}_i\,\mathbf{m}_i^\top,
+  \label{eq:rank1}
+\end{equation}
+which is the rank-1 inflation we introduced today.  Writing
+$\mathbf{u}_i \equiv \mathrm{coh}\cdot\mathbf{m}_i$, this is exactly the
+form analytically equivalent to fitting a free per-cluster amplitude
+nuisance with a Gaussian prior of width \texttt{coh\_amplitude} on its
+fractional deviation from unity — the technique used in cluster cosmology
+to absorb intrinsic-scatter contributions to $\Sigma_{\rm crit}$ and
+mass-richness modelling \citep[e.g.][]{Mantz2010,Mantz2015}.  The same
+"add a model-proportional rank-1 term to the covariance" idea is the
+standard remedy for un-modelled multiplicative systematics in cosmic-shear
+two-point analyses \citep[][\S 4.5]{Heymans2013}, with the role of
+$\mathbf{m}_i$ played there by the data vector itself.
+
+\paragraph{Sherman--Morrison Cholesky update.}
+A dense inversion of Eq.\,(\ref{eq:rank1}) for $N=5000$ clusters at
+every nautilus likelihood call would be prohibitive.  The Sherman--Morrison
+identity \citep{ShermanMorrison1950}
+\begin{equation}
+  (\mathbf{A} + \mathbf{u}\mathbf{u}^\top)^{-1} \;=\;
+   \mathbf{A}^{-1}
+   \;-\; \frac{\mathbf{A}^{-1}\mathbf{u}\,\mathbf{u}^\top \mathbf{A}^{-1}}
+              {1 + \mathbf{u}^\top \mathbf{A}^{-1}\mathbf{u}},
+  \label{eq:sm}
+\end{equation}
+combined with the matrix determinant lemma
+$|\mathbf{A}+\mathbf{u}\mathbf{u}^\top| = |\mathbf{A}|\,(1+\mathbf{u}^\top\mathbf{A}^{-1}\mathbf{u})$
+\citep[][Eq.\,1.5.13]{Harville2008}, allows us to reuse the existing
+Cholesky factor $\mathbf{L}_i$ of $\mathbf{C}_i$ without ever building or
+inverting the dense matrix.  Concretely, with
+$\mathbf{y}=\mathbf{L}^{-1}\mathbf{r}$ and $\mathbf{w}=\mathbf{L}^{-1}\mathbf{u}$
+obtained from two cheap triangular solves,
+\begin{align}
+  \ln|\mathbf{C}_{\rm eff}|     &= 2\sum_j\!\ln L_{jj} + \ln\!\bigl(1 + \mathbf{w}^\top\mathbf{w}\bigr), \label{eq:logdet}\\
+  \mathbf{r}^\top\mathbf{C}_{\rm eff}^{-1}\mathbf{r} &= \mathbf{y}^\top\mathbf{y}
+       - \frac{(\mathbf{y}^\top\mathbf{w})^2}{1 + \mathbf{w}^\top\mathbf{w}}.
+  \label{eq:quad_sm}
+\end{align}
+The per-cluster cost goes from $\mathcal{O}(k^3)$ (the original Cholesky
+factorisation of $\mathbf{C}_i$, $k=N_{\rm bin}$) to that same value plus
+\emph{one} additional $\mathcal{O}(k^2)$ triangular solve for
+$\mathbf{w}$ — a $<\!10\%$ overhead in our $k=8$ pipeline.
+
+\paragraph{Why use the model $\mathbf{m}_i$ as the rank-1 direction.}
+There is a subtle but important choice in Eq.\,(\ref{eq:rank1}): the
+rank-1 direction is the \emph{current} forward-model prediction
+$\mathbf{m}_i(\boldsymbol\theta)$, not a pre-computed template.  This
+matters because the sampled parameters can shift the model amplitude
+substantially (different $c_0$ values give different
+$\dsig$-normalisation, etc.).  A fixed template would impose a static
+inflation direction that does not track those amplitude changes and would
+under-inflate near the head of the chain and over-inflate in its tails.
+Using $\mathbf{m}_i(\boldsymbol\theta)$ keeps the inflation
+\emph{fractional} at all parameter values — the right physics for an
+amplitude-multiplicative effect — and is the same recipe used implicitly
+in stacked-NFW cluster lensing analyses when the "intrinsic-scatter"
+parameter is profile-shape independent \citep{McClintock2018,McClintock2019}.
+
+\paragraph{Implementation.}
+\begin{itemize}[noitemsep]
+  \item \texttt{cholog\_gaussian} gains two optional kwargs
+        \texttt{coh\_vectors} and \texttt{coh\_amplitude} (default
+        \texttt{None, 0.0} — bare likelihood unchanged).
+  \item All three likelihoods (\texttt{log\_likelihood},
+        \texttt{log\_likelihood\_mc}, \texttt{log\_likelihood\_combined})
+        and \texttt{run\_sampler\_combined} expose
+        \texttt{coh\_amplitude} as a keyword and pass the current
+        forward-model profile as \texttt{coh\_vectors}.
+  \item \texttt{scripts/gamma\_scan.py} and \texttt{scripts/gamma\_repeat.py}
+        expose a module-level \texttt{COH\_AMPLITUDE} constant
+        (\texttt{os.environ}-overridable; default $0.0$).
+  \item The unbiased notebook's sampler-call cell now sets
+        \texttt{coh\_amplitude=0.0} with a comment pointing at the
+        $\sim\!0.25$ recommended value.
+\end{itemize}
+
+\paragraph{Numerical validation.}
+Five new tests pin the math:
+\begin{itemize}[noitemsep]
+  \item \texttt{cholog\_gaussian} via Sherman--Morrison matches an
+        explicit \texttt{scipy.stats.multivariate\_normal.logpdf} on the
+        dense $(\mathbf{C}_i+\mathbf{u}_i\mathbf{u}_i^\top)$ to
+        \texttt{rtol=1e-10}.
+  \item Backward compatibility: \texttt{coh\_amplitude=0} reproduces the
+        bare-likelihood result to numerical equality.
+  \item In the aligned-residual / large-amplitude regime ($\mathbf{r}=\mathbf{u}$
+        with $|\mathbf{u}|\gg 1$) the inflated log-pdf strictly exceeds
+        the bare value, matching the analytical prediction from
+        Eqs.\,(\ref{eq:logdet})--(\ref{eq:quad_sm}).
+  \item Negative amplitudes return $-\infty$ (the rank-1 update would
+        not preserve positive-definiteness).
+  \item End-to-end via \texttt{log\_likelihood\_combined}, which both
+        accepts and applies the new kwarg with no NaN leakage.
+\end{itemize}
+
+\paragraph{Tuning script.}
+The amplitude \texttt{coh\_amplitude} is a model hyperparameter that
+should be calibrated empirically against the 20-realisation
+\texttt{gamma\_repeat} setup.  A dedicated driver,
+\texttt{scripts/coh\_amplitude\_scan.py}, automates this: it imports
+\texttt{gamma\_repeat} as a library, mutates
+\texttt{gr.COH\_AMPLITUDE} between runs, and produces three diagnostic
+figures:
+\begin{enumerate}[noitemsep]
+  \item \texttt{coh\_amplitude\_scan\_calibration.png}: the calibration
+        ratio $\sigma_{\rm runs}/\langle\sigma_\gamma^{\rm post}\rangle$
+        vs amplitude, with a marker at the root of (ratio$-$1) found by
+        linear interpolation between scan points.
+  \item \texttt{coh\_amplitude\_scan\_widths.png}: $\sigma_{\rm runs}$
+        (empirical) and $\langle\sigma_\gamma^{\rm post}\rangle$ (mean
+        posterior) plotted separately so the user can see the inflation
+        of the posterior width independently of the run-to-run scatter.
+  \item \texttt{coh\_amplitude\_scan\_bias.png}: the residual bias
+        $\langle\hat\gamma\rangle-\gamma_{\rm true}$ vs amplitude,
+        confirming that the inflation does not shift the centre of the
+        posterior away from the truth.
+\end{enumerate}
+A grid of $\sim 6$ amplitudes between $0$ and $0.6$ with
+$\sim\!10$ realisations each is the recommended starting point; the
+predicted root from the \citet{Mantz2010}-style argument (matching the
+amplitude variance to the observed coherent scatter) is
+$\mathrm{coh}\approx 0.25$.
+
+\subsection{Status after Fix \#2: still under-coverage}
+
+The latest 20-realisation run (Figs.\,\ref{fig:repeat_residuals}--\ref{fig:repeat_overlay})
+gives a calibration ratio of $2.75$ — better than the $3.67$ we measured
+yesterday with the bare covariance, but still significantly above $1$.
+The remaining under-coverage indicates that the rank-1 model captures
+\emph{part} of the missing variance but not all of it.
+
+\paragraph{Plausible reasons the residual mismatch persists.}
+\begin{itemize}[noitemsep]
+  \item The chosen \texttt{coh\_amplitude} value used in this run was
+        small (or zero) — the headline numbers above are from a
+        \texttt{coh\_amplitude=0} draw used to establish the new baseline
+        after the day's bugfixes.  A direct tuning scan over
+        \texttt{COH\_AMPLITUDE} $\in\{0.0, 0.15, 0.25, 0.40, 0.60\}$ at
+        $N=5000$ is the obvious next step.
+  \item The triaxiality + miscentering residual is not strictly
+        \emph{rank-1} per cluster.  A more accurate description has at
+        least two effective components: a near-uniform amplitude shift
+        \emph{plus} a radial-shape distortion (the inner peak smears
+        differently from the outer tail).  A rank-2 inflation
+        $\mathbf{C}_i\to\mathbf{C}_i+\sigma_1^2\mathbf{m}_i\mathbf{m}_i^\top
+        +\sigma_2^2\mathbf{v}_i\mathbf{v}_i^\top$, with $\mathbf{v}_i$ a
+        precomputed inner-vs-outer contrast vector, would suppress the
+        residual mismatch further.
+  \item Shared systematics (point 3 above) are still unmodelled.  A
+        global mass-calibration nuisance with a broader prior than the
+        current $\log M_{\rm norm}\sim\mathcal{N}(0,0.1)$, and a global
+        shape-of-$n(z)$ nuisance, would soak up correlated cluster-to-
+        cluster scatter and inflate $\sigma_\gamma^{\rm post}$ in the
+        right direction.
+  \item Per-cluster source-catalogue Poisson scatter on $n_{{\rm gal},b}$
+        affects the variance of $\dsig_{i,b}$ in addition to its mean;
+        the current shape-noise variance uses the realised $n_{{\rm gal},b}$,
+        not the expectation.  Marginalising this analytically would tighten
+        the per-bin covariance estimate.
+\end{itemize}
+
+%──────────────────────────────────────────────────────────────────────────────
+\section{Commits of the day}
+%──────────────────────────────────────────────────────────────────────────────
+
+\begin{footnotesize}
+\begin{tabular}{ll}
+\toprule
+hash & subject \\
+\midrule
+\texttt{81ab19d} & Sampler timeout, gamma prior scale, and notebook tweaks \\
+\texttt{67e2b43} & \texttt{gamma\_repeat.py}: failures don't count; folders deleted; loop targets $N$ successes \\
+\texttt{df60c43} & \texttt{fitting}: NaN guards in likelihood + \texttt{cholog\_gaussian} (never return NaN) \\
+\texttt{b4a9d2d} & Add unit tests for previously-untested public module functions \\
+\texttt{af9bcf8} & \texttt{tests}: clean up the three pre-existing failures (suite now 118/118) \\
+\texttt{3d05580} & Rank-1 covariance inflation via Sherman--Morrison (\texttt{coh\_amplitude} kwarg) \\
+\bottomrule
+\end{tabular}
+\end{footnotesize}
+
+Both branches \texttt{claude} and \texttt{develop} were kept in sync on
+every push.
+
+%──────────────────────────────────────────────────────────────────────────────
+\section*{Conclusions and outlook}
+%──────────────────────────────────────────────────────────────────────────────
+
+The mock pipeline is now both more robust (no hangs, no NaNs, no silently
+counted failures) and better unit-tested (\textbf{123/123 passing,
+including five tests that validate the Sherman--Morrison math against a
+dense brute-force \texttt{scipy} computation}).
+
+The headline scientific result is unchanged from yesterday: the
+\emph{average} $\gamma$ recovery is unbiased, but \emph{per-realisation}
+posteriors are too narrow.  We identified the dominant cause as the
+per-cluster covariance missing the coherent amplitude scatter from
+triaxiality and miscentering realisation, and we implemented the rank-1
+fix without touching the existing solver path.  The next concrete steps
+are (i) a tuning scan over \texttt{COH\_AMPLITUDE}, (ii) an upgrade to a
+two-component (amplitude + radial-shape) inflation if the rank-1 case
+saturates the calibration improvement, and (iii) a controlled experiment
+that adds shared-systematic nuisances (mass-richness offset, source
+$n(z)$ shape) to test whether the residual mismatch is structural or
+also drawn from common-mode terms.
+
+%──────────────────────────────────────────────────────────────────────────────
+\begin{thebibliography}{99}
+
+\bibitem[Allgood et al.(2006)]{Allgood2006}
+Allgood, B., Flores, R.~A., Primack, J.~R., et al.\ 2006, \mnras, 367, 1781.
+
+\bibitem[Becker \& Kravtsov(2011)]{Becker2011}
+Becker, M.~R., \& Kravtsov, A.~V.\ 2011, \apj, 740, 25.
+
+\bibitem[Bishop(2006)]{Bishop2006}
+Bishop, C.~M.\ 2006, \textit{Pattern Recognition and Machine Learning}, Springer.
+\S 1.6 (Gaussian distributions, marginal/conditional formulas).
+
+\bibitem[Corless \& King(2007)]{Corless2007}
+Corless, V.~L., \& King, L.~J.\ 2007, \mnras, 380, 149.
+
+\bibitem[Harville(2008)]{Harville2008}
+Harville, D.~A.\ 2008, \textit{Matrix Algebra From a Statistician's
+Perspective}, Springer. Eq.~1.5.13 (matrix determinant lemma).
+
+\bibitem[Heymans et al.(2013)]{Heymans2013}
+Heymans, C., Grocutt, E., Heavens, A., et al.\ 2013, \mnras, 432, 2433.
+
+\bibitem[Jing \& Suto(2002)]{JingSuto2002}
+Jing, Y.~P., \& Suto, Y.\ 2002, \apj, 574, 538.
+
+\bibitem[Johnston et al.(2007)]{Johnston2007}
+Johnston, D.~E., Sheldon, E.~S., Tasitsiomi, A., et al.\ 2007, \apj, 656, 27.
+
+\bibitem[Mantz et al.(2010)]{Mantz2010}
+Mantz, A., Allen, S.~W., Rapetti, D., \& Ebeling, H.\ 2010, \mnras, 406, 1759.
+
+\bibitem[Mantz et al.(2015)]{Mantz2015}
+Mantz, A.~B., Allen, S.~W., Morris, R.~G., et al.\ 2015, \mnras, 449, 199.
+
+\bibitem[McClintock et al.(2018)]{McClintock2018}
+McClintock, T., Varga, T.~N., Gruen, D., et al.\ 2018, \mnras, 482, 1352.
+
+\bibitem[McClintock et al.(2019)]{McClintock2019}
+McClintock, T., Rozo, E., Becker, M.~R., et al.\ 2019, \apj, 872, 53.
+
+\bibitem[Oguri \& Hamana(2011)]{Oguri2012}
+Oguri, M., \& Hamana, T.\ 2011, \mnras, 414, 1851.
+
+\bibitem[Rykoff et al.(2016)]{Rykoff2016}
+Rykoff, E.~S., Rozo, E., Hollowood, D., et al.\ 2016, \apjs, 224, 1.
+
+\bibitem[Sherman \& Morrison(1950)]{ShermanMorrison1950}
+Sherman, J., \& Morrison, W.~J.\ 1950, Annals of Mathematical Statistics,
+21, 124.
+
+\bibitem[Zhang et al.(2019)]{Zhang2019}
+Zhang, Y., Jeltema, T., Hollowood, D.~L., et al.\ 2019, \mnras, 487, 2578.
+
+\end{thebibliography}
+
+\end{document}

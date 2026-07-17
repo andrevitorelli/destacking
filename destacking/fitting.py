@@ -537,7 +537,11 @@ def run_sampler_combined(
         n_live=n_live, pool=pool,
         filepath=filepath, resume=resume,
     )
-    sampler.run(verbose=verbose,timeout=timeout)
+    converged = sampler.run(verbose=verbose, timeout=timeout)
+    # nautilus returns False when stopped by timeout/n_like_max rather
+    # than convergence.  Exposed as an attribute to keep the return
+    # signature unchanged for existing callers.
+    sampler.converged = bool(converged)
     return sampler
 
 
@@ -735,5 +739,9 @@ def run_sampler_combined_resampled(
         n_live=n_live, pool=pool,
         filepath=filepath, resume=resume,
     )
-    sampler.run(verbose=verbose, timeout=timeout)
+    converged = sampler.run(verbose=verbose, timeout=timeout)
+    # nautilus returns False when stopped by timeout/n_like_max rather
+    # than convergence.  Exposed as an attribute to keep the return
+    # signature unchanged for existing callers.
+    sampler.converged = bool(converged)
     return sampler

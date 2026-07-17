@@ -1,0 +1,66 @@
+# gamma_inference.py configuration template.
+#
+# Usage:
+#   python gamma_inference.py my_config.yaml
+#   or CONFIG=my_config.yaml python gamma_inference.py
+# Every key can also be set by its UPPER_CASE environment variable;
+# YAML wins over env, which wins over the built-in default.
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: true          # generate + measure the synthetic sample
+inference:  true          # run the bootstrap fits + combine posteriors
+# data_folder: <path>     # REQUIRED when simulation is false: directory of
+                          # simulation_g*_gamma*/ checkpoints to fit
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [-0.5, 1.0]  # endpoints of np.linspace
+n_gamma:     11
+n_workers:   10           # pool size for simulation and for each nautilus fit
+
+# ═══ SIMULATION phase ═════════════════════════════════════════════════════
+# Cluster sample
+n_clusters:      1000
+z_cluster_range: [0.10, 0.60]
+
+# Source survey
+density:     7.5          # source density [gal/arcmin^2]
+shape_noise: 0.27         # per-component intrinsic ellipticity RMS
+smail_alpha: 2.0          # Smail n(z): p(z) ∝ (z/z0)^α exp[−(z/z0)^β]
+smail_beta:  1.5
+smail_z0:    0.4
+
+# Physics
+triaxiality:  true        # false = pure spherical NFW
+miscentering: true        # false = all clusters perfectly centred
+f_cen:           0.64     # TRUTH: correctly-centred fraction
+sigma_off_mpc_h: 0.32     # TRUTH: offset Rayleigh scale [Mpc/h]
+
+# Simulated radial grid [Mpc]: np.logspace(inner, outer, n)
+sim_log_inner_radius: -0.8
+sim_log_outer_radius:  0.6
+sim_n_radii:           8
+
+# Measurement
+n_cov_bootstrap: 200      # galaxy bootstrap draws per cluster (DV + cov)
+
+# sim_prefix: 'sim_myrun_g'   # notebook-compat file prefix override
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true         # cluster bootstrap over the sample
+n_bootstrap: 5            # fits per gamma point (posteriors are combined)
+timeout:     1200         # wall-time budget per nautilus fit [s] — scale
+                          # with sample size or fits collapse
+
+# Fit radial grid: the radii the data vectors live on.  OPTIONAL on full
+# runs (defaults to the sim grid); REQUIRED in inference-only mode, where
+# it must describe the grid of the data in data_folder.
+# fit_log_inner_radius: -0.8
+# fit_log_outer_radius:  0.6
+# fit_n_radii:           8
+r_min_fit: 0.5            # minimum radius [Mpc] for bins entering the fit
+
+# Fit-model miscentering (what the likelihood assumes).  Defaults follow
+# the simulation truth: 1 - f_cen when miscentering is on, else 0.  Set
+# explicitly to study model-truth mismatches.
+fit_fmiss:           0.36
+fit_sigma_off_mpc_h: 0.32
