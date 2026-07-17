@@ -516,8 +516,29 @@ def run_sampler_combined(
     sample_A = 'A' in priors
     if sample_A:
         nprior.add_parameter('A', dist=priors['A'])
+    # Optional population-level miscentering: when the priors dict contains
+    # 'f_mis' (global miscentered fraction) and 'sigma_off' (global offset
+    # Rayleigh scale [Mpc]), both are SAMPLED and override the fixed
+    # FMISS / SIGMA_OFF arrays.  They remain population parameters — the
+    # same value is applied to every cluster, not fit per cluster.
+    # Parameter order: appended after log_M_norm (and A, if sampled), so
+    # the indices of all earlier parameters are unchanged.
+    sample_mis = ('f_mis' in priors) or ('sigma_off' in priors)
+    if sample_mis and not ('f_mis' in priors and 'sigma_off' in priors):
+        raise KeyError("sampling miscentering requires both 'f_mis' and "
+                       "'sigma_off' priors")
+    if sample_mis:
+        nprior.add_parameter('f_mis',     dist=priors['f_mis'])
+        nprior.add_parameter('sigma_off', dist=priors['sigma_off'])
+    n_cl = len(data_vectors)
 
     def _loglike(p):
+        if sample_mis:
+            fmiss_arr = np.full(n_cl, p['f_mis'])
+            soff_arr  = np.full(n_cl, p['sigma_off'])
+        else:
+            fmiss_arr = FMISS
+            soff_arr  = SIGMA_OFF
         return log_likelihood_combined(
             p['c0'], p['alpha'], p['gamma'],
             cluster_table, data_vectors, cov_matrices, radii,
@@ -527,8 +548,8 @@ def run_sampler_combined(
             delta_m_ref=delta_m_ref,
             log_M_norm=p['log_M_norm'],
             A=p.get('A', 1.0),
-            FMISS=FMISS,
-            SIGMA_OFF=SIGMA_OFF,
+            FMISS=fmiss_arr,
+            SIGMA_OFF=soff_arr,
             BCG_B_MASS=BCG_B_MASS,
         )
 

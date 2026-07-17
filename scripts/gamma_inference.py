@@ -19,6 +19,9 @@ YAML keys (in addition to everything gamma_scan.py accepts):
   fit_log_outer_radius:  0.6  #   live on.  Defaults to the sim grid on full
   fit_n_radii:           8    #   runs; REQUIRED in inference-only mode.
   r_min_fit:             0.5  # minimum radius [Mpc] for bins entering the fit
+  fit_miscentering: false  # sample population-level f_mis and sigma_off as
+                           #   free fit parameters (flat priors) instead of
+                           #   fixing them at fit_fmiss / fit_sigma_off_mpc_h
   data_folder: <path>      # REQUIRED when simulation is false: a directory
                            # containing simulation_g{k:02d}_gamma{v:+.1f}/
                            # subdirectories in the standard checkpoint
@@ -112,6 +115,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.cosmology import Planck18 as _planck18
 from scipy.stats import norm as sp_norm
+from scipy.stats import uniform as sp_uniform
 
 
 from destacking.fitting import run_sampler_combined
@@ -332,6 +336,11 @@ _edges = np.logspace(_log_r[0] - _dlog / 2, _log_r[-1] + _dlog / 2,
 BIN_LIMITS = np.column_stack([_edges[:-1], _edges[1:]])
 N_BINS     = len(SIM_RADII)
 
+# Fit population-level miscentering (f_mis, sigma_off) as free parameters
+# instead of fixing them at fit_fmiss / fit_sigma_off_mpc_h.
+FIT_MISCENTERING = _yaml_bool(_cfg("fit_miscentering", "FIT_MISCENTERING",
+                                   False))
+
 PRIORS = {
     "c0":         sp_norm(loc=4.57, scale=0.05),
     "alpha":      sp_norm(loc=-0.1, scale=0.05),
@@ -346,6 +355,15 @@ PRIOR_LABELS = {
     "gamma": r"$\gamma$", "log_M_norm": r"$\log M_{\rm norm}$",
 }
 PARAM_ORDER = ["c0", "alpha", "beta", "gamma", "log_M_norm"]
+
+if FIT_MISCENTERING:
+    # Flat priors: f_mis over its full physical range, sigma_off [Mpc]
+    # over a generous positive range around plausible offsets.
+    PRIORS["f_mis"]     = sp_uniform(loc=0.0,  scale=1.0)
+    PRIORS["sigma_off"] = sp_uniform(loc=0.05, scale=1.45)
+    PRIOR_LABELS["f_mis"]     = r"$f_{\rm mis}$"
+    PRIOR_LABELS["sigma_off"] = r"$\sigma_{\rm off}$ [Mpc]"
+    PARAM_ORDER = PARAM_ORDER + ["f_mis", "sigma_off"]
 
 N_LIVE  = 400
 # Wall-time budget per nautilus fit [s].  Scale with N_CLUSTERS: the 600 s
@@ -503,6 +521,23 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
     lo  = _wq(gamma_s, weights, 0.16)
     med = _wq(gamma_s, weights, 0.50)
     hi  = _wq(gamma_s, weights, 0.84)
+
+    mis_summary = {}
+    if FIT_MISCENTERING:
+        for pname in ("f_mis", "sigma_off"):
+            col = points[:, PARAM_ORDER.index(pname)]
+            p_lo  = _wq(col, weights, 0.16)
+            p_med = _wq(col, weights, 0.50)
+            p_hi  = _wq(col, weights, 0.84)
+            mis_summary[f"{pname}_med"]   = float(p_med)
+            mis_summary[f"{pname}_sigma"] = float((p_hi - p_lo) / 2.0)
+        print(
+            f"    miscentering fit: f_mis = {mis_summary['f_mis_med']:.4f} "
+            f"± {mis_summary['f_mis_sigma']:.4f}, "
+            f"sigma_off = {mis_summary['sigma_off_med']:.4f} "
+            f"± {mis_summary['sigma_off_sigma']:.4f} Mpc",
+            flush=True,
+        )
     # Persist the full posterior (all PARAM_ORDER columns) so the corner
     # plot can be regenerated later without re-running nautilus.
     np.savez_compressed(npz_path,
@@ -530,6 +565,9 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
         if "beta" in PARAM_ORDER:
             truths[PARAM_ORDER.index("beta")] = float(ols.get("beta_true",
                                                               np.nan))
+        if "f_mis" in PARAM_ORDER:
+            truths[PARAM_ORDER.index("f_mis")]     = 1.0 - F_CEN
+            truths[PARAM_ORDER.index("sigma_off")] = SIGMA_OFF_MPC
         fig = _corner.corner(
             points, weights=weights,
             labels=labels,
@@ -561,6 +599,7 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
         "gamma_lo":      float(lo),
         "gamma_hi":      float(hi),
         "sigma_gamma":   float((hi - lo) / 2.0),
+        **mis_summary,
         **fit_diag,
         "n_clusters":    n_data,
         "n_resample":    n_resample_actual,

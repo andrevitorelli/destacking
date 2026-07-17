@@ -1,0 +1,32 @@
+# Free-miscentering refit of the triaxial + miscentered high-SNR run.
+# Inference-only on the checkpoints of run_2026-07-17T14-22-41 (truth:
+# f_mis = 0.36, sigma_off = 0.32 Mpc/h ≈ 0.475 Mpc), with the population
+# miscentering parameters SAMPLED (flat priors) instead of fixed:
+# tests whether f_mis and sigma_off are recoverable from the profiles and
+# whether gamma stays unbiased with miscentering marginalised.
+#
+# Usage: python gamma_inference.py hisnr_fit_miscentering.yaml
+# (branch: fit_miscentering)
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: false
+inference:  true
+data_folder: gamma_scan_outputs/run_2026-07-17T14-22-41
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [-0.5, 1.0]
+n_gamma:     11
+n_workers:   10
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 5
+timeout:     2400          # 7 sampled parameters — larger budget per fit
+
+fit_log_inner_radius: -0.8
+fit_log_outer_radius:  0.6
+fit_n_radii:           8
+r_min_fit:             0.5
+
+fit_miscentering: true     # sample f_mis and sigma_off (flat priors);
+                           # fit_fmiss / fit_sigma_off_mpc_h are ignored
