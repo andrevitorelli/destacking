@@ -1,0 +1,33 @@
+# FMISS-consistent refit of the TRIAXIAL high-SNR run.
+# Inference-only on the checkpoints of run_2026-07-16T21-27-35 (triaxial,
+# perfectly centred): the model uses fit_fmiss = 0, replacing the pre-fix
+# spurious 36% miscentered fraction those fits carried.  Companion to
+# hisnr_fmiss_refit.yaml (spherical), which moved the recovery slope from
+# 1.107 to 0.973.
+#
+# Usage: python gamma_inference.py hisnr_tri_fmiss_refit.yaml
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: false
+inference:  true
+data_folder: gamma_scan_outputs/run_2026-07-16T21-27-35
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [-0.5, 1.0]
+n_gamma:     11
+n_workers:   10
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 5
+timeout:     1200
+
+# fit radial grid: REQUIRED in inference-only mode — must describe the
+# grid the data in data_folder was measured on
+fit_log_inner_radius: -0.8
+fit_log_outer_radius:  0.6
+fit_n_radii:           8
+r_min_fit:             0.5
+
+fit_fmiss:           0.0   # model assumes perfectly centred (matches the
+fit_sigma_off_mpc_h: 0.32  #   simulation truth of the data folder)

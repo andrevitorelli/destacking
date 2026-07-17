@@ -8,4 +8,4 @@
 !*.yaml
 !*.yml
 scripts/gamma_scan_outputs/
-!*.tex
+!docs/*.tex
