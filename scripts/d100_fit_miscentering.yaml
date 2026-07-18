@@ -1,0 +1,49 @@
+# Free-miscentering test at 100 gal/arcmin^2.
+# Same as the hisnr_fit_miscentering test (triaxial + miscentered truth,
+# f_mis and sigma_off SAMPLED as population parameters) but at 10x lower
+# source density: fresh simulation + inference in one run.
+#
+# Usage: python gamma_inference.py d100_fit_miscentering.yaml
+# (branch: fit_miscentering)
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: true
+inference:  true
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [-0.5, 1.0]
+n_gamma:     11
+n_workers:   10
+
+# ═══ SIMULATION phase ═════════════════════════════════════════════════════
+n_clusters:      1000
+z_cluster_range: [0.10, 0.60]
+
+density:     100.0
+shape_noise: 0.27
+smail_alpha: 2.0
+smail_beta:  1.5
+smail_z0:    0.4
+
+triaxiality:  true
+miscentering: true
+f_cen:           0.64  # TRUTH: correctly-centred fraction
+sigma_off_mpc_h: 0.32  # TRUTH: offset Rayleigh scale [Mpc/h]
+
+sim_log_inner_radius: -0.8
+sim_log_outer_radius:  0.6
+sim_n_radii:           8
+
+n_cov_bootstrap: 200
+
+sim_prefix: 'sim_d100_trimis_g'
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 5
+timeout:     2400          # 7 sampled parameters — larger budget per fit
+
+# fit radial grid omitted: full runs default to the sim grid
+r_min_fit: 0.5
+
+fit_miscentering: true     # sample f_mis and sigma_off (flat priors)
