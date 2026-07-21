@@ -1,0 +1,75 @@
+# prepare_real_data.py configuration template.
+#
+# Usage: python prepare_real_data.py my_real_data_config.yaml
+#
+# Produces a gamma_inference.py-compatible data_folder from a real WaZP-like
+# cluster catalogue and a DES-Y3-like metacalibration shear catalogue. See
+# the module docstring in prepare_real_data.py for the full pipeline and the
+# on-disk layout written.
+
+# ═══ Cluster catalogue ═══════════════════════════════════════════════════
+# Point at a pre-built compact catalogue (columns ID, RA, DEC, NGALS, ZPHOT,
+# DELTA_M_I[, DELTA_M_I_ERR]) ...
+cluster_catalog_file: data/wazp_real_data.fits
+
+# ... or build it from the raw WaZP cluster + member catalogues (set both
+# to build/rebuild; leave null to require cluster_catalog_file to exist
+# already). When both are given, the compact catalogue is (re)built and
+# written to cluster_catalog_file.
+clusters_file: null   # e.g. /path/to/y6a2_dnf_wazp_..._clusters.fits
+members_file:  null   # e.g. /path/to/y6a2_dnf_wazp_..._members.fits
+
+# Selection cuts applied only when building from the raw catalogues above
+richness_min: 25          # NGALS >
+z_max:        0.7         # ZPHOT <
+require_bcg:  true         # require a FLAG_CG=true member
+mag_gap_r_cut_mpc: 0.5    # inner-satellite radius for the magnitude gap
+
+# Applied regardless of catalogue source: clusters with a non-finite or
+# non-positive DELTA_M_I are cluster-finder artefacts (BCG fainter than the
+# brightest inner satellite) and get flagged; the model falls back to
+# delta_m_ref for them (no gamma correction) rather than being dropped.
+delta_m_min: 0.0
+
+# ═══ Source catalogue (DES-Y3-like metacalibration) ═══════════════════════
+# HDF5, group catalog/unsheared, columns: ra, dec, flags, snr, size_ratio,
+# T, e_1, e_2, weight, R11, R12, R21, R22, coadd_object_id
+metacal_file: null
+# HDF5, group catalog/unsheared, columns: zmean_sof, coadd_object_id
+# (row-aligned with metacal_file — checked at load time)
+dnf_file: null
+
+filtered_cache: data/metacal_filtered.npz
+chunk_read: 10000000   # metacal rows streamed per chunk during pre-filter
+
+# ═══ Measurement ═══════════════════════════════════════════════════════════
+radius_mpc: 5.0            # cone/aperture radius passed to metacal_cluster_lensing
+
+# Radial grid [Mpc]: np.logspace(log_inner_radius, log_outer_radius, n_radii).
+# MUST match the fit_log_inner_radius/fit_log_outer_radius/fit_n_radii keys
+# of the gamma_inference.py config later used to fit this data (inference-
+# only mode requires them explicitly — see gamma_inference_config_example.yaml).
+log_inner_radius: -0.8
+log_outer_radius:  0.6
+n_radii:           8
+
+n_cov_bootstrap: 200       # galaxy-level bootstrap draws per cluster (data
+                           # vector + covariance from the same estimator,
+                           # no boost — see the module docstring)
+min_sources: 20            # minimum background sources in the aperture to
+                           # keep a cluster; below this it is dropped
+                           # (NaN data vector, skipped by the likelihood)
+
+n_workers: 8
+checkpoint_every: 1000     # clusters between measurement checkpoints
+use_cache: true            # reuse the source pre-filter cache and any
+                           # partial measurement checkpoint; set false to
+                           # force a clean rebuild of both
+
+# ═══ Output ══════════════════════════════════════════════════════════════
+out_dir: gamma_scan_outputs/wazp_real_data   # a gamma_inference data_folder
+g_idx: 0
+gamma_true: 0.0    # NOT a truth value — real clusters have no known gamma.
+                   # Pure directory-naming/metadata label; see the module
+                   # docstring for how to point gamma_inference.py at this
+                   # output and read gamma_est without the "bias" columns.
