@@ -98,20 +98,22 @@ def c_DuttonMaccio(z, m,c=1., h=1.):
   return concentration
 
 #####mass richness
-def mass_lambda_McClintock18(Lambda,z):
+def mass_lambda_McClintock18(Lambda, z, Flambda=1.356, Gz=-0.30):
   """
-  Mass-richness relation of DES clusters (McClintock+18)
+  Mass-richness relation of DES clusters (McClintock+18).
+
+  Flambda (richness slope) and Gz (redshift-evolution slope) default to
+  the McClintock+18 values but can be overridden -- e.g. to treat them as
+  free parameters when the mass-richness relation is not assumed known
+  (see destacking.model.forward_model_combined's lambda_slope/mr_z_slope).
   """
   #pivots
   log10Lambda0 = np.log10(40)
   log10z0 = np.log10(0.35)
   log10M0 = 14.489
-  #scalings
-  Flambda = 1.356
-  Gz = -0.30
-    
+
   mlog10M200 = log10M0 + Flambda*(np.log10(Lambda)-log10Lambda0) + Gz*(np.log10(z) - log10z0)
-    
+
   return mlog10M200
 
 

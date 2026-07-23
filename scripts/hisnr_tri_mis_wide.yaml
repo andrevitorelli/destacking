@@ -1,0 +1,97 @@
+# Very high SNR triaxial + miscentered test, WIDE priors, ALL NINE model
+# parameters fit jointly.
+# Same physics truth as hisnr_tri_mis.yaml (f_cen = 0.64, sigma_off_mpc_h =
+# 0.32, triaxiality + miscentering on), but:
+#   - n_clusters: 1500, density: 100 gal/arcmin^2 (shortened from the
+#     3000-cluster/1000-gal/arcmin^2 version: 10x fewer galaxies per
+#     cluster and half the clusters cuts both the simulation phase and
+#     the per-likelihood-call cost substantially)
+#   - gamma_range: [0.0, 1.0], 11 points (was [-0.5, 1.0])
+#   - n_bootstrap: 10 (was 5)
+#   - fit_params: SENSIBLE WIDE Gaussian priors on ALL NINE parameters —
+#     the mass-concentration relation (c0, alpha_cm, beta_cm, gamma_cm),
+#     mass normalisation (log_M_norm), the mass-richness relation
+#     (alpha_mr, beta_mr), and miscentering (f_mis, sigma_off) — instead
+#     of assuming any of these relations is known.  Nothing is fixed.
+#   - timeout: 7200 — 9 simultaneously-fit parameters is a much higher-
+#     dimensional problem than the previous 5, needs a generous budget.
+#
+# Naming: _cm = mass-concentration relation, _mr = mass-richness relation
+# (see gamma_inference_config_example.yaml's "Per-parameter fit control"
+# section for the full convention).
+#
+# Usage: python gamma_inference.py hisnr_tri_mis_wide.yaml
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+# Widened-priors repeat: same simulated data as the previous (1500-cluster,
+# density-100) run — physics truth is unchanged, only fit_params below
+# changed, so re-simulating would be wasted work.  Read the existing
+# checkpoints and only redo inference.
+simulation: false
+inference:  true
+data_folder: '/home/andre/github/destacking/scripts/gamma_scan_outputs/run_2026-07-21T23-23-37'
+
+# Inference-only mode requires the fit radial grid explicitly (must match
+# the grid the referenced data was simulated on: sim_log_inner_radius=-0.8,
+# sim_log_outer_radius=0.6, sim_n_radii=8, below).
+fit_log_inner_radius: -0.8
+fit_log_outer_radius:  0.6
+fit_n_radii:           8
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [0.0, 1.0]
+n_gamma:     11
+n_workers:   12
+
+# ═══ SIMULATION phase ═════════════════════════════════════════════════════
+n_clusters:      1500
+z_cluster_range: [0.10, 0.60]
+
+density:     100.0    # gal/arcmin^2 — still well above DES-like, shortened
+                      # from the 1000 gal/arcmin^2 extreme-SNR version
+shape_noise: 0.27
+smail_alpha: 2.0
+smail_beta:  1.5
+smail_z0:    0.4
+
+triaxiality:  true
+miscentering: true
+f_cen:           0.64  # TRUTH: correctly-centred fraction
+sigma_off_mpc_h: 0.32  # TRUTH: offset Rayleigh scale [Mpc/h] (-> 0.4730 Mpc)
+
+sim_log_inner_radius: -0.8
+sim_log_outer_radius:  0.6
+sim_n_radii:           8
+
+n_cov_bootstrap: 200
+
+sim_prefix: 'sim_hisnr_trimis_wideall_d100_g'
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 10
+timeout:     7200     # 9-parameter joint fit -> much larger volume to
+                      # explore than the previous 5-parameter version
+
+# fit radial grid omitted: full runs default to the sim grid
+r_min_fit: 0.5
+
+# Sensible WIDE Gaussian priors on every parameter — mass-concentration
+# relation, mass normalisation, mass-richness relation, AND miscentering,
+# all fit together.  c0/alpha_cm/beta_cm/gamma_cm/log_M_norm unchanged from
+# the previous (5-parameter) version of this file; alpha_mr/beta_mr/f_mis/
+# sigma_off are newly freed here, each centred near its true simulated
+# value with a generously wide scale (not the tight/fixed treatment used
+# before).
+fit_params:
+  # Mass-concentration relation priors (c0/alpha_cm/beta_cm/gamma_cm) widened
+  # 3x in scale (loc unchanged) vs. the previous run of this config.
+  c0:           {fit: true, prior: gaussian, loc: 4.5,   scale: 3.0}
+  alpha_cm:     {fit: true, prior: gaussian, loc: -0.1,  scale: 0.9}
+  beta_cm:      {fit: true, prior: gaussian, loc: -0.4,  scale: 1.5}
+  gamma_cm:     {fit: true, prior: gaussian, loc: 0.0,   scale: 10.5}
+  log_M_norm:   {fit: true, prior: gaussian, loc: 0.0,   scale: 0.3}
+  alpha_mr:     {fit: true, prior: gaussian, loc: 1.356, scale: 0.5}
+  beta_mr:      {fit: true, prior: gaussian, loc: -0.30, scale: 0.3}
+  f_mis:        {fit: true, prior: gaussian, loc: 0.36,  scale: 0.3}
+  sigma_off:    {fit: true, prior: gaussian, loc: 0.4730, scale: 0.3}

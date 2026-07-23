@@ -191,15 +191,17 @@ def forward_model_mc(
 
 def forward_model_combined(
     c0,
-    alpha,
-    gamma,
+    alpha_cm,
+    gamma_cm,
     cluster_table,
     radii,
-    beta=0.0,
+    beta_cm=0.0,
     M_pivot_log=_MC_M_PIVOT_LOG,
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
     log_M_norm=0.0,
+    alpha_mr=1.356,
+    beta_mr=-0.30,
     A=1.0,
     FMISS=None,
     SIGMA_OFF=None,
@@ -209,15 +211,23 @@ def forward_model_combined(
     Predict NFW ΔΣ profiles using a combined M–c + magnitude-gap model
     with an optional global amplitude correction.
 
-    The full parametric concentration is:
+    Two scaling relations combine: the mass-richness relation (subscript
+    _mr, McClintock+18 form) sets M from Lambda and z; the mass-
+    concentration relation (subscript _cm) sets c from M, z, and the
+    magnitude gap Δm:
+
+        log10(M) = log10(M0) + alpha_mr * (log10(Lambda) − log10(Lambda0))
+                              + beta_mr  * (log10(z) − log10(z0))
+                              + log_M_norm
 
         log10(c) = log10(c0)
-                 + alpha * (log10(M) − M_pivot_log)
-                 + beta  * log10((1+z) / (1+z_ref))
-                 + gamma * log10(Δm / delta_m_ref)
+                 + alpha_cm * (log10(M) − M_pivot_log)
+                 + beta_cm  * log10((1+z) / (1+z_ref))
+                 + gamma_cm * log10(Δm / delta_m_ref)
 
-    gamma is d(log10 c) / d(log10(Δm/Δm_ref)).  Clusters without detected
-    satellites (delta_m = NaN) receive no gamma correction (log10 ratio = 0).
+    gamma_cm is d(log10 c) / d(log10(Δm/Δm_ref)).  Clusters without
+    detected satellites (delta_m = NaN) receive no gamma_cm correction
+    (log10 ratio = 0).
 
     The signal returned is
 
@@ -233,16 +243,19 @@ def forward_model_combined(
     ----------
     c0 : float
         Concentration normalisation at M = 10^M_pivot_log, z = z_ref, Δm = delta_m_ref.
-    alpha : float
-        Logarithmic slope  d log10(c) / d log10(M).
-    gamma : float
-        Magnitude-gap slope  d log10(c) / d log10(Δm/Δm_ref).
+    alpha_cm : float
+        Mass-concentration relation: logarithmic mass slope
+        d log10(c) / d log10(M).
+    gamma_cm : float
+        Mass-concentration relation: magnitude-gap slope
+        d log10(c) / d log10(Δm/Δm_ref).
     cluster_table : astropy.table.Table
         Must have columns 'z', 'Lambda', and 'delta_m'.
     radii : array (M,)
         Projected radii in Mpc.
-    beta : float
-        Redshift-evolution slope  d log10(c) / d log10(1+z).  Default 0.
+    beta_cm : float
+        Mass-concentration relation: redshift-evolution slope
+        d log10(c) / d log10(1+z).  Default 0.
     M_pivot_log : float
         log10(M_pivot / M_sun).  Default 14.0.
     z_ref : float
@@ -251,6 +264,13 @@ def forward_model_combined(
         Reference magnitude gap [mag].  Default 1.0.
     log_M_norm : float
         Log10 mass normalisation offset [dex].  Default 0.
+    alpha_mr : float
+        Mass-richness relation: richness slope F_lambda in
+        mass_lambda_McClintock18.  Default 1.356 (McClintock+18).  Free
+        this when the mass-richness relation is not assumed known.
+    beta_mr : float
+        Mass-richness relation: redshift-evolution slope G_z in
+        mass_lambda_McClintock18.  Default -0.30 (McClintock+18).
     A : float
         Global multiplicative amplitude correction.  Default 1.0 (no
         correction) reproduces the previous forward model.
@@ -267,7 +287,8 @@ def forward_model_combined(
     Lambda = np.asarray(cluster_table['Lambda'])
     dm     = np.asarray(cluster_table['delta_m'], dtype=float)
 
-    logM  = mass_lambda_McClintock18(Lambda, z) + log_M_norm
+    logM  = mass_lambda_McClintock18(Lambda, z, Flambda=alpha_mr,
+                                     Gz=beta_mr) + log_M_norm
     M200m = 10.0 ** logM
 
     dm_eff   = np.where(np.isfinite(dm), dm, delta_m_ref)
@@ -275,9 +296,9 @@ def forward_model_combined(
     log_dm_r = np.log10(dm_eff / delta_m_ref)
 
     logC = (np.log10(c0)
-            + alpha * (logM - M_pivot_log)
-            + beta  * np.log10((1.0 + z) / (1.0 + z_ref))
-            + gamma * log_dm_r)
+            + alpha_cm * (logM - M_pivot_log)
+            + beta_cm  * np.log10((1.0 + z) / (1.0 + z_ref))
+            + gamma_cm * log_dm_r)
     C200m = 10.0 ** logC
 
     return A * _nfw_profiles(

@@ -240,7 +240,7 @@ def test_log_likelihood_combined_gamma_zero_matches_mc(combined_dataset):
     cluster_obs, data, cov = combined_dataset
     ll_combined = log_likelihood_combined(
         5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
-        beta=-0.3, log_M_norm=0.0,
+        beta_cm=-0.3, log_M_norm=0.0,
     )
     ll_mc = log_likelihood_mc(
         5.0, -0.1, cluster_obs, data, cov, RADII,
@@ -292,9 +292,9 @@ def test_run_sampler_combined_runs_and_returns_finite(combined_dataset):
     cluster_obs, data, cov = combined_dataset
     priors = {
         "c0":         sp_norm(loc=5.0, scale=0.5),
-        "alpha":      sp_norm(loc=-0.1, scale=0.05),
-        "beta":       sp_norm(loc=-0.4, scale=0.2),
-        "gamma":      sp_norm(loc=0.0,  scale=1.0),
+        "alpha_cm":   sp_norm(loc=-0.1, scale=0.05),
+        "beta_cm":    sp_norm(loc=-0.4, scale=0.2),
+        "gamma_cm":   sp_norm(loc=0.0,  scale=1.0),
         "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
     }
     sampler = run_sampler_combined(
@@ -304,6 +304,8 @@ def test_run_sampler_combined_runs_and_returns_finite(combined_dataset):
     )
     points, log_w, log_l = sampler.posterior()
     assert points.shape[0] > 0
-    assert points.shape[1] == 5  # c0, alpha, beta, gamma, log_M_norm
+    assert points.shape[1] == 5  # c0, alpha_cm, beta_cm, gamma_cm, log_M_norm
+    assert sampler.param_order == ["c0", "alpha_cm", "beta_cm", "gamma_cm",
+                                   "log_M_norm"]
     assert np.any(np.isfinite(log_w))
     assert not np.any(np.isnan(log_w))

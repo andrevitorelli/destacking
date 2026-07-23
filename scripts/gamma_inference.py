@@ -19,9 +19,13 @@ YAML keys (in addition to everything gamma_scan.py accepts):
   fit_log_outer_radius:  0.6  #   live on.  Defaults to the sim grid on full
   fit_n_radii:           8    #   runs; REQUIRED in inference-only mode.
   r_min_fit:             0.5  # minimum radius [Mpc] for bins entering the fit
-  fit_miscentering: false  # sample population-level f_mis and sigma_off as
-                           #   free fit parameters (flat priors) instead of
-                           #   fixing them at fit_fmiss / fit_sigma_off_mpc_h
+  fit_params: {...}        # PREFERRED: full per-parameter fit control (see
+                           #   "Per-parameter fit control" below). Mutually
+                           #   exclusive with the three legacy keys below.
+  fit_miscentering: false  # LEGACY (no fit_params): sample population-level
+                           #   f_mis and sigma_off as free fit parameters
+                           #   (flat priors) instead of fixing them at
+                           #   fit_fmiss / fit_sigma_off_mpc_h
   data_folder: <path>      # REQUIRED when simulation is false: a directory
                            # containing simulation_g{k:02d}_gamma{v:+.1f}/
                            # subdirectories in the standard checkpoint
@@ -116,6 +120,7 @@ import numpy as np
 from astropy.cosmology import Planck18 as _planck18
 from scipy.stats import norm as sp_norm
 from scipy.stats import uniform as sp_uniform
+from scipy.stats import truncnorm as sp_truncnorm
 
 
 from destacking.fitting import run_sampler_combined
@@ -125,6 +130,8 @@ from destacking.io import (
     write_notebook_compat_sim,
 )
 from destacking.plotting import (
+    overlay_priors_on_corner,
+    plot_combined_corner as _plot_combined_corner_impl,
     plot_gamma_scan_results as _plot_gamma_scan_results,
     plot_posteriors_overlay as _plot_posteriors_overlay_impl,
 )
@@ -311,19 +318,6 @@ SIGMA_OFF_MPC_H = float(_cfg("sigma_off_mpc_h", "SIGMA_OFF_MPC_H", 0.32,
 H_PLANCK        = float(_planck18.h)
 SIGMA_OFF_MPC   = SIGMA_OFF_MPC_H / H_PLANCK
 
-# Fit-model miscentering (what the likelihood assumes), independent of the
-# simulation truth above.  Defaults keep model and truth consistent:
-# fit_fmiss = 1 - f_cen when miscentering is on, 0 when off.  Set the keys
-# explicitly to study model-truth mismatches.
-_fit_fmiss_raw = _cfg("fit_fmiss", "FIT_FMISS", None)
-if _fit_fmiss_raw is None:
-    FIT_FMISS = (1.0 - F_CEN) if MISCENTERING else 0.0
-else:
-    FIT_FMISS = float(_fit_fmiss_raw)
-FIT_SIGMA_OFF_MPC_H = float(_cfg("fit_sigma_off_mpc_h", "FIT_SIGMA_OFF_MPC_H",
-                                 SIGMA_OFF_MPC_H, cast=float))
-FIT_SIGMA_OFF_MPC   = FIT_SIGMA_OFF_MPC_H / H_PLANCK
-
 DENSITY         = float(_cfg("density",     "DENSITY",     7.5,  cast=float))
 SHAPE_NOISE     = float(_cfg("shape_noise", "SHAPE_NOISE", 0.27, cast=float))
 WIDTH_RAD       = 0.006
@@ -336,34 +330,182 @@ _edges = np.logspace(_log_r[0] - _dlog / 2, _log_r[-1] + _dlog / 2,
 BIN_LIMITS = np.column_stack([_edges[:-1], _edges[1:]])
 N_BINS     = len(SIM_RADII)
 
-# Fit population-level miscentering (f_mis, sigma_off) as free parameters
-# instead of fixing them at fit_fmiss / fit_sigma_off_mpc_h.
-FIT_MISCENTERING = _yaml_bool(_cfg("fit_miscentering", "FIT_MISCENTERING",
-                                   False))
-
-PRIORS = {
-    "c0":         sp_norm(loc=4.57, scale=0.05),
-    "alpha":      sp_norm(loc=-0.1, scale=0.05),
-    "beta":       sp_norm(loc=-0.4, scale=0.2),
-    "gamma":      sp_norm(loc=0.0,  scale=3.5),
-    "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
-    # NB: A (the global multiplicative amplitude correction) is omitted
-    # so that destacking.fitting.run_sampler_combined fixes it at 1.0.
+# ── Per-parameter fit control ─────────────────────────────────────────────
+#
+# Which of the model's parameters are sampled (with a chosen prior) versus
+# held fixed (at a declared value) is controlled by the YAML 'fit_params'
+# block — one entry per parameter, e.g.:
+#
+#   fit_params:
+#     c0:           {fit: true,  prior: gaussian, loc: 4.57, scale: 0.05}
+#     alpha_cm:     {fit: true,  prior: gaussian, loc: -0.1, scale: 0.05}
+#     beta_cm:      {fit: false, value: -0.4018}
+#     gamma_cm:     {fit: true,  prior: gaussian, loc: 0.0,  scale: 3.5}
+#     log_M_norm:   {fit: true,  prior: gaussian, loc: 0.0,  scale: 0.1}
+#     alpha_mr:     {fit: false, value: 1.356}    # McClintock+18 F_lambda
+#     beta_mr:      {fit: false, value: -0.30}    # McClintock+18 G_z
+#     f_mis:        {fit: true,  prior: flat, lo: 0.0,  hi: 1.0}
+#     sigma_off:    {fit: true,  prior: flat, lo: 0.05, hi: 1.5}
+#
+# Naming: _cm parameters belong to the mass-concentration relation
+# (alpha_cm/beta_cm/gamma_cm are its mass/redshift/magnitude-gap slopes);
+# _mr parameters belong to the mass-richness relation (alpha_mr/beta_mr
+# are its richness/redshift slopes) — distinct namespaces so both
+# relations can be fit at once without name collisions.  c0/log_M_norm are
+# not relation-specific (concentration normalisation, mass-richness
+# normalisation offset) and keep unqualified names.
+#
+# All nine names are required when 'fit_params' is given — every parameter
+# is either fit (with an explicit prior) or fixed (with an explicit value),
+# no silent defaults.  'gamma_cm' must have fit: true (it is the science
+# target of this pipeline). Legacy configs that omit 'fit_params' keep the
+# pre-existing hardcoded behaviour exactly (see _build_fit_params below).
+_FIT_PARAM_LABELS = {
+    "c0":         r"$c_0$",
+    "alpha_cm":   r"$\alpha_{\rm cm}$",
+    "beta_cm":    r"$\beta_{\rm cm}$",
+    "gamma_cm":   r"$\gamma_{\rm cm}$",
+    "log_M_norm": r"$\log M_{\rm norm}$",
+    "alpha_mr":   r"$\alpha_{\rm mr}$",
+    "beta_mr":    r"$\beta_{\rm mr}$",
+    "f_mis":      r"$f_{\rm mis}$",
+    "sigma_off":  r"$\sigma_{\rm off}$ [Mpc]",
 }
-PRIOR_LABELS = {
-    "c0": r"$c_0$", "alpha": r"$\alpha$", "beta": r"$\beta$",
-    "gamma": r"$\gamma$", "log_M_norm": r"$\log M_{\rm norm}$",
-}
-PARAM_ORDER = ["c0", "alpha", "beta", "gamma", "log_M_norm"]
+_FIT_PARAM_NAMES = tuple(_FIT_PARAM_LABELS)
 
-if FIT_MISCENTERING:
-    # Flat priors: f_mis over its full physical range, sigma_off [Mpc]
-    # over a generous positive range around plausible offsets.
-    PRIORS["f_mis"]     = sp_uniform(loc=0.0,  scale=1.0)
-    PRIORS["sigma_off"] = sp_uniform(loc=0.05, scale=1.45)
-    PRIOR_LABELS["f_mis"]     = r"$f_{\rm mis}$"
-    PRIOR_LABELS["sigma_off"] = r"$\sigma_{\rm off}$ [Mpc]"
-    PARAM_ORDER = PARAM_ORDER + ["f_mis", "sigma_off"]
+# f_mis is a fraction and sigma_off is a scale radius — both are physically
+# bounded regardless of what the user's Gaussian prior says, so a 'gaussian'
+# fit_params entry for these two names is truncated to its physical range
+# rather than left as an unbounded normal (which can sample negative
+# sigma_off or f_mis outside [0, 1] once the prior is widened).
+_GAUSSIAN_PRIOR_BOUNDS = {
+    "f_mis":     (0.0, 1.0),
+    "sigma_off": (0.0, None),
+}
+
+
+def _prior_from_spec(name, spec):
+    """One fit_params.<name> entry -> ('sample', frozen_dist) or
+    ('fixed', float). Raises SystemExit with a specific message on any
+    malformed or incomplete spec — there is no silent fallback."""
+    if not isinstance(spec, dict) or "fit" not in spec:
+        raise SystemExit(
+            f"fit_params.{name} must be a mapping with a boolean 'fit' key"
+        )
+    if _yaml_bool(spec["fit"]):
+        kind = spec.get("prior")
+        if kind == "gaussian":
+            for k in ("loc", "scale"):
+                if k not in spec:
+                    raise SystemExit(
+                        f"fit_params.{name}: prior 'gaussian' requires '{k}'"
+                    )
+            loc, scale = float(spec["loc"]), float(spec["scale"])
+            bounds = _GAUSSIAN_PRIOR_BOUNDS.get(name)
+            if bounds is not None:
+                lo, hi = bounds
+                a = -np.inf if lo is None else (lo - loc) / scale
+                b = np.inf if hi is None else (hi - loc) / scale
+                return "sample", sp_truncnorm(a, b, loc=loc, scale=scale)
+            return "sample", sp_norm(loc=loc, scale=scale)
+        if kind == "flat":
+            for k in ("lo", "hi"):
+                if k not in spec:
+                    raise SystemExit(
+                        f"fit_params.{name}: prior 'flat' requires '{k}'"
+                    )
+            lo, hi = float(spec["lo"]), float(spec["hi"])
+            if not hi > lo:
+                raise SystemExit(f"fit_params.{name}: 'hi' must exceed 'lo'")
+            return "sample", sp_uniform(loc=lo, scale=hi - lo)
+        raise SystemExit(
+            f"fit_params.{name}: 'prior' must be 'gaussian' or 'flat' "
+            f"(got {kind!r})"
+        )
+    else:
+        if "value" not in spec:
+            raise SystemExit(
+                f"fit_params.{name}: fit is false, so 'value' is required"
+            )
+        return "fixed", float(spec["value"])
+
+
+def _build_fit_params():
+    """Resolve every parameter to either a prior (sampled) or a fixed
+    value, returning (priors, fixed) dicts for run_sampler_combined.
+
+    Preferred path: the explicit 'fit_params' YAML block, giving full
+    control over what is fit and its prior, with fixed parameters
+    requiring a precise declared value.
+
+    Legacy path (no 'fit_params' in the config): reproduces the original
+    hardcoded behaviour exactly — c0/alpha_cm/beta_cm/gamma_cm/log_M_norm
+    always sampled with fixed Gaussian priors, alpha_mr/beta_mr fixed at
+    the McClintock+18 values, and f_mis/sigma_off controlled by the older
+    fit_miscentering/fit_fmiss/fit_sigma_off_mpc_h keys — so every
+    pre-existing config keeps working unmodified.
+    """
+    raw = _cfg("fit_params", None, None)
+    legacy_keys = ("fit_miscentering", "fit_fmiss", "fit_sigma_off_mpc_h")
+
+    if raw is not None:
+        used_legacy = [k for k in legacy_keys if k in _CFG]
+        if used_legacy:
+            raise SystemExit(
+                f"fit_params is set; remove the legacy key(s) {used_legacy} "
+                f"and control f_mis/sigma_off through fit_params instead"
+            )
+        missing = [n for n in _FIT_PARAM_NAMES if n not in raw]
+        if missing:
+            raise SystemExit(
+                f"fit_params is missing entries for {missing} — every one "
+                f"of {list(_FIT_PARAM_NAMES)} must be declared (fit or fixed)"
+            )
+        priors, fixed = {}, {}
+        for name in _FIT_PARAM_NAMES:
+            kind, val = _prior_from_spec(name, raw[name])
+            (priors if kind == "sample" else fixed)[name] = val
+        if "gamma_cm" not in priors:
+            raise SystemExit(
+                "fit_params.gamma_cm must have fit: true — gamma_cm is "
+                "the science target of this pipeline"
+            )
+        return priors, fixed
+
+    # ── Legacy path ──────────────────────────────────────────────────────
+    priors = {
+        "c0":         sp_norm(loc=4.57, scale=0.05),
+        "alpha_cm":   sp_norm(loc=-0.1, scale=0.05),
+        "beta_cm":    sp_norm(loc=-0.4, scale=0.2),
+        "gamma_cm":   sp_norm(loc=0.0,  scale=3.5),
+        "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
+    }
+    fixed = {"alpha_mr": 1.356, "beta_mr": -0.30}
+
+    fit_miscentering = _yaml_bool(
+        _cfg("fit_miscentering", "FIT_MISCENTERING", False)
+    )
+    if fit_miscentering:
+        priors["f_mis"]     = sp_uniform(loc=0.0,  scale=1.0)
+        priors["sigma_off"] = sp_uniform(loc=0.05, scale=1.45)
+    else:
+        # Fit-model miscentering (what the likelihood assumes), independent
+        # of the simulation truth (F_CEN/SIGMA_OFF_MPC).  Defaults keep
+        # model and truth consistent: fit_fmiss = 1 - f_cen when
+        # miscentering is on, 0 when off.
+        _fit_fmiss_raw = _cfg("fit_fmiss", "FIT_FMISS", None)
+        if _fit_fmiss_raw is None:
+            fixed["f_mis"] = (1.0 - F_CEN) if MISCENTERING else 0.0
+        else:
+            fixed["f_mis"] = float(_fit_fmiss_raw)
+        _fit_sig_h = float(_cfg("fit_sigma_off_mpc_h", "FIT_SIGMA_OFF_MPC_H",
+                                SIGMA_OFF_MPC_H, cast=float))
+        fixed["sigma_off"] = _fit_sig_h / H_PLANCK
+    return priors, fixed
+
+
+PRIORS, FIXED_PARAMS = _build_fit_params()
+PRIOR_LABELS = dict(_FIT_PARAM_LABELS)
 
 N_LIVE  = 400
 # Wall-time budget per nautilus fit [s].  Scale with N_CLUSTERS: the 600 s
@@ -448,6 +590,32 @@ def _write_notebook_compat_sim(g_idx, gamma_true, truth, cluster_obs, bgs):
     )
 
 
+def _param_truths(param_order, ols, gamma_true):
+    """Truth-line values for a corner plot, one per name in param_order (or
+    None where no truth is known/applicable).  c0/alpha_cm/beta_cm come
+    from the truth catalogue's OLS fit (``ols``, empty for real data ->
+    NaN, which corner simply skips); alpha_mr/beta_mr from the
+    McClintock+18 values; f_mis/sigma_off from the simulation's
+    F_CEN/SIGMA_OFF_MPC."""
+    truths = [None] * len(param_order)
+    if "gamma_cm" in param_order:
+        truths[param_order.index("gamma_cm")] = float(gamma_true)
+    if "c0" in param_order:
+        truths[param_order.index("c0")] = float(ols.get("c0_true", np.nan))
+    if "alpha_cm" in param_order:
+        truths[param_order.index("alpha_cm")] = float(ols.get("alpha_true", np.nan))
+    if "beta_cm" in param_order:
+        truths[param_order.index("beta_cm")] = float(ols.get("beta_true", np.nan))
+    if "alpha_mr" in param_order:
+        truths[param_order.index("alpha_mr")] = 1.356
+    if "beta_mr" in param_order:
+        truths[param_order.index("beta_mr")] = -0.30
+    if "f_mis" in param_order:
+        truths[param_order.index("f_mis")]     = 1.0 - F_CEN
+        truths[param_order.index("sigma_off")] = SIGMA_OFF_MPC
+    return truths
+
+
 # ── Bootstrap draw runner ─────────────────────────────────────────────────────
 
 def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
@@ -484,25 +652,26 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
     cluster_obs_boot      = cluster_obs[idx_boot]
     data_vectors_fit_boot = data_vectors_fit[idx_boot]
     cov_matrices_fit_boot = cov_matrices_fit[idx_boot]
-    # Fit-model miscentering from the explicit FIT_FMISS / FIT_SIGMA_OFF
-    # config (defaults mirror the simulation truth: 1 - f_cen when
-    # miscentering is on, 0 when off).  (Fixed 2026-07-17: this was
-    # previously 1 - F_CEN unconditionally, so miscentering: false runs
-    # were fit with a spuriously miscentered model.)
-    FMISS_boot     = np.full(n_resample_actual, FIT_FMISS)
-    SIGMA_OFF_boot = np.full(n_resample_actual, FIT_SIGMA_OFF_MPC)
 
     checkpoint = os.path.join(subdir, "nautilus_checkpoint.hdf5")
     fit_t0  = time.time()
+    # PRIORS/FIXED_PARAMS (module-level, from _build_fit_params) declare
+    # every parameter as either sampled or fixed at a precise value — see
+    # the "Per-parameter fit control" section above.  No FMISS/SIGMA_OFF
+    # arrays are built here any more: f_mis/sigma_off go through the same
+    # sample-or-fixed mechanism as every other parameter.
     sampler = run_sampler_combined(
         cluster_obs_boot, data_vectors_fit_boot, cov_matrices_fit_boot, RADII_fit,
-        priors=PRIORS, delta_m_ref=DELTA_M_REF, fit_beta=True,
-        FMISS=FMISS_boot, SIGMA_OFF=SIGMA_OFF_boot,
+        priors=PRIORS, fixed=FIXED_PARAMS, delta_m_ref=DELTA_M_REF,
         n_live=N_LIVE, pool=N_WORKERS,
         verbose=True, filepath=checkpoint, resume=True, timeout=TIMEOUT,
     )
     fit_wall_s = time.time() - fit_t0
     converged  = bool(getattr(sampler, "converged", True))
+    # The set (and order) of SAMPLED parameters — only these are columns of
+    # `points` below.  Authoritative: mirrors nautilus.Prior.keys exactly,
+    # so it is correct for whatever subset PRIORS declares this run.
+    param_order = list(getattr(sampler, "param_order", list(PRIORS)))
     # Sampler diagnostics for post-hoc fit-quality assessment: a poor fit
     # shows up as converged=False, fit_wall_s ~ timeout_s, and/or low n_eff.
     fit_diag = {
@@ -512,20 +681,33 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
         "n_like":     int(getattr(sampler, "n_like", -1)),
         "n_eff":      float(getattr(sampler, "n_eff", np.nan)),
         "log_z":      float(getattr(sampler, "log_z", np.nan)),
+        # Information gain from prior to posterior, in nats:
+        # D_KL(posterior || prior) = <log L>_posterior - log Z. Always
+        # reported (attached by run_sampler_combined itself).
+        "kl_nats":    float(getattr(sampler, "kl_nats", np.nan)),
+        # Per-parameter marginal KL(posterior_i || prior_i) and the
+        # joint-minus-sum-of-marginals residual (= mutual information the
+        # fit induced between parameters, since the priors are independent
+        # across parameters — see run_sampler_combined's docstring/comment).
+        "marginal_kl_nats": {
+            k: float(v)
+            for k, v in getattr(sampler, "marginal_kl_nats", {}).items()
+        },
+        "kl_residual_nats": float(getattr(sampler, "kl_residual_nats", np.nan)),
     }
     points, log_w, _ = sampler.posterior()
     weights = np.exp(log_w - log_w.max())
     weights /= weights.sum()
 
-    gamma_s = points[:, 3]
+    gamma_s = points[:, param_order.index("gamma_cm")]
     lo  = _wq(gamma_s, weights, 0.16)
     med = _wq(gamma_s, weights, 0.50)
     hi  = _wq(gamma_s, weights, 0.84)
 
     mis_summary = {}
-    if FIT_MISCENTERING:
+    if "f_mis" in param_order:
         for pname in ("f_mis", "sigma_off"):
-            col = points[:, PARAM_ORDER.index(pname)]
+            col = points[:, param_order.index(pname)]
             p_lo  = _wq(col, weights, 0.16)
             p_med = _wq(col, weights, 0.50)
             p_hi  = _wq(col, weights, 0.84)
@@ -538,13 +720,13 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
             f"± {mis_summary['sigma_off_sigma']:.4f} Mpc",
             flush=True,
         )
-    # Persist the full posterior (all PARAM_ORDER columns) so the corner
+    # Persist the full posterior (all param_order columns) so the corner
     # plot can be regenerated later without re-running nautilus.
     np.savez_compressed(npz_path,
                         gamma_samples=gamma_s,
                         weights=weights,
                         all_samples=points,
-                        param_order=np.asarray(PARAM_ORDER))
+                        param_order=np.asarray(param_order))
 
     # Per-fit corner plot inside this bootstrap subdir.  When BOOTSTRAP=0
     # there is exactly one bootstrap per gamma, so this lands at
@@ -552,22 +734,8 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
     # gamma's directory" for the typical no-bootstrap run.
     try:
         import corner as _corner
-        labels = [PRIOR_LABELS.get(p, p) for p in PARAM_ORDER]
-        truths = [None] * len(PARAM_ORDER)
-        if "gamma" in PARAM_ORDER:
-            truths[PARAM_ORDER.index("gamma")] = float(gamma_true)
-        if "c0" in PARAM_ORDER:
-            truths[PARAM_ORDER.index("c0")] = float(ols.get("c0_true",
-                                                            np.nan))
-        if "alpha" in PARAM_ORDER:
-            truths[PARAM_ORDER.index("alpha")] = float(ols.get("alpha_true",
-                                                               np.nan))
-        if "beta" in PARAM_ORDER:
-            truths[PARAM_ORDER.index("beta")] = float(ols.get("beta_true",
-                                                              np.nan))
-        if "f_mis" in PARAM_ORDER:
-            truths[PARAM_ORDER.index("f_mis")]     = 1.0 - F_CEN
-            truths[PARAM_ORDER.index("sigma_off")] = SIGMA_OFF_MPC
+        labels = [PRIOR_LABELS.get(p, p) for p in param_order]
+        truths = _param_truths(param_order, ols, gamma_true)
         fig = _corner.corner(
             points, weights=weights,
             labels=labels,
@@ -578,7 +746,9 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
             plot_datapoints=False, fill_contours=True,
             levels=(0.39, 0.86),
             smooth=1.0,
+            hist_kwargs={"density": True},
         )
+        overlay_priors_on_corner(fig, param_order, PRIORS)
         fig.suptitle(
             f"posterior — γ_true={gamma_true:+.3f}, "
             f"γ_med={med:+.3f} ± {(hi - lo) / 2.0:.3f}",
@@ -617,9 +787,18 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
     print(
         f"    fit diagnostics: wall={fit_diag['fit_wall_s']:.0f}s"
         f"/{TIMEOUT}s budget, n_like={fit_diag['n_like']}, "
-        f"N_eff={fit_diag['n_eff']:.0f}, log Z={fit_diag['log_z']:.2f}",
+        f"N_eff={fit_diag['n_eff']:.0f}, log Z={fit_diag['log_z']:.2f}, "
+        f"KL={fit_diag['kl_nats']:.2f} nats",
         flush=True,
     )
+    _marg = fit_diag["marginal_kl_nats"]
+    if _marg:
+        _marg_str = ", ".join(f"{n}={v:.2f}" for n, v in _marg.items())
+        print(
+            f"    marginal KL [nats]: {_marg_str}  "
+            f"(residual/mutual-info={fit_diag['kl_residual_nats']:.2f})",
+            flush=True,
+        )
     return result
 
 
@@ -804,16 +983,29 @@ def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
         )
         use_results = results
     pool_s, pool_w = [], []
+    pool_all, pool_all_w = [], []
+    combined_param_order = None
     for r in use_results:
         npz_path = os.path.join(
             out_subdir, f"bootstrap_{r['bootstrap']:03d}", "gamma_posterior.npz"
         )
         if not os.path.exists(npz_path):
             continue
-        data = np.load(npz_path)
+        data = np.load(npz_path, allow_pickle=True)
         w = data["weights"]
         pool_s.append(data["gamma_samples"])
         pool_w.append(w / w.sum())
+        # All-parameter pooling for the combined corner plot.  param_order
+        # is fixed for the whole run (PRIORS/FIXED_PARAMS are module-level
+        # globals), so every bootstrap should agree; a mismatch (e.g. a
+        # checkpoint from a differently-configured run) is skipped rather
+        # than silently concatenated into garbage columns.
+        this_order = [str(p) for p in data["param_order"]]
+        if combined_param_order is None:
+            combined_param_order = this_order
+        if this_order == combined_param_order:
+            pool_all.append(data["all_samples"])
+            pool_all_w.append(w / w.sum())
 
     if pool_s:
         pool_s = np.concatenate(pool_s)
@@ -852,6 +1044,10 @@ def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
             [r["fit_wall_s"] for r in results if "fit_wall_s" in r] or [np.nan])),
         "median_n_eff":       float(np.median(
             [r["n_eff"] for r in results if "n_eff" in r] or [np.nan])),
+        # Median information gain (nats) from prior to posterior across
+        # this gamma's bootstrap fits — see fit_diag['kl_nats'] per fit.
+        "median_kl_nats":     float(np.median(
+            [r["kl_nats"] for r in results if "kl_nats" in r] or [np.nan])),
         **ols,
     }
     with open(ens_path, "w") as f:
@@ -859,7 +1055,8 @@ def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
     print(
         f"  γ={gamma_true:+.1f}  γ_est={comb_med:+.4f} ± {sigma_comb:.4f} "
         f"(combined posterior, {n_converged}/{len(results)} converged fits)  "
-        f"bias={comb_med - gamma_true:+.4f}",
+        f"bias={comb_med - gamma_true:+.4f}  "
+        f"median KL={ens_result['median_kl_nats']:.2f} nats",
         flush=True,
     )
 
@@ -869,6 +1066,24 @@ def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
     except Exception:
         pass
 
+    # Combined corner plot: the mixture posterior over EVERY fit parameter
+    # (not just gamma), pooling all converged bootstraps the same way as
+    # the gamma-only combination above.
+    if pool_all and combined_param_order:
+        try:
+            samples_all = np.concatenate(pool_all)
+            weights_all = np.concatenate(pool_all_w)
+            weights_all = weights_all / weights_all.sum()
+            corner_path = os.path.join(out_subdir, "combined_corner.png")
+            out = _plot_combined_corner(
+                samples_all, weights_all, combined_param_order, corner_path,
+                ols, gamma_true, n_converged, N_CLUSTERS,
+            )
+            if out:
+                print(f"    combined corner plot → {out}", flush=True)
+        except Exception as exc:
+            print(f"    combined corner plot skipped: {exc!r}", flush=True)
+
     return ens_result
 
 
@@ -877,44 +1092,58 @@ def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
 # Plot implementations live in destacking.plotting; these wrappers inject
 # the scan-level configuration so run-loop call sites stay unchanged.
 
-def plot_gamma_scan_results(scan_results, run_dir, bin_size=10):
+def plot_gamma_scan_results(scan_results, run_dir):
     return _plot_gamma_scan_results(scan_results, run_dir,
                                     n_clusters=N_CLUSTERS,
-                                    n_bootstrap=N_BOOTSTRAP,
-                                    bin_size=bin_size)
+                                    n_bootstrap=N_BOOTSTRAP)
 
 
 def _plot_posteriors_overlay(results, sim_subdir, gamma_true):
     return _plot_posteriors_overlay_impl(results, sim_subdir, gamma_true,
-                                         gamma_prior=PRIORS["gamma"],
+                                         gamma_prior=PRIORS["gamma_cm"],
                                          n_clusters=N_CLUSTERS)
 
 
+def _plot_combined_corner(samples, weights, param_order, out_path, ols,
+                          gamma_true, n_bootstrap, n_clusters):
+    labels = [PRIOR_LABELS.get(p, p) for p in param_order]
+    truths = _param_truths(param_order, ols, gamma_true)
+    return _plot_combined_corner_impl(
+        samples, weights, param_order, out_path,
+        labels=labels, truths=truths, gamma_true=gamma_true,
+        n_bootstrap=n_bootstrap, n_clusters=n_clusters, priors=PRIORS,
+    )
+
+
 def print_scan_table(scan_results):
-    print("\n" + "=" * 82, flush=True)
+    print("\n" + "=" * 94, flush=True)
     print(
         f'{"g_idx":>6}  {"gamma_true":>10}  {"gamma_est":>10}  '
-        f'{"sigma_gamma":>11}  {"bias":>8}  {"bias/sig":>8}',
+        f'{"sigma_gamma":>11}  {"bias":>8}  {"bias/sig":>8}  {"KL[nats]":>9}',
         flush=True,
     )
-    print("-" * 82, flush=True)
+    print("-" * 94, flush=True)
     for r in scan_results:
         bias = r["gamma_ensemble_med"] - r["gamma_true"]
         bsig = bias / max(r["sigma_gamma"], 1e-12)
+        kl = r.get("median_kl_nats", np.nan)
         print(
             f'{r["g_idx"]:>6d}  {r["gamma_true"]:>+10.3f}  '
             f'{r["gamma_ensemble_med"]:>+10.4f}  '
             f'{r["sigma_gamma"]:>11.4f}  '
             f'{bias:>+8.4f}  '
-            f'{bsig:>+8.2f}',
+            f'{bsig:>+8.2f}  '
+            f'{kl:>9.2f}',
             flush=True,
         )
     residuals = np.array([r["gamma_ensemble_med"] - r["gamma_true"] for r in scan_results])
     sig_gammas = np.array([r["sigma_gamma"] for r in scan_results])
-    print("-" * 82, flush=True)
+    kl_nats = np.array([r.get("median_kl_nats", np.nan) for r in scan_results])
+    print("-" * 94, flush=True)
     print(
         f"RMS bias = {np.sqrt(np.mean(residuals**2)):.4f}   "
-        f"mean(sigma_gamma) = {np.mean(sig_gammas):.4f}",
+        f"mean(sigma_gamma) = {np.mean(sig_gammas):.4f}   "
+        f"mean(KL) = {np.nanmean(kl_nats):.2f} nats",
         flush=True,
     )
 
@@ -936,6 +1165,9 @@ def write_progress(scan_results, run_dir, run_t0, n_total):
                 "gamma_est":  round(r["gamma_ensemble_med"], 4),
                 "sigma_gamma": round(r["sigma_gamma"], 4),
                 "bias":       round(r["gamma_ensemble_med"] - r["gamma_true"], 4),
+                "median_kl_nats": (round(r["median_kl_nats"], 3)
+                                   if np.isfinite(r.get("median_kl_nats", np.nan))
+                                   else None),
             }
             for r in scan_results
         ],

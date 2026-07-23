@@ -142,7 +142,7 @@ def test_forward_model_combined_gamma_zero_decouples_from_mc(test_dataset):
     # With gamma = 0 the combined model and the bare M-c model must agree.
     cluster_obs, _, _ = test_dataset
     p_mc       = forward_model_mc(5.0, -0.1, cluster_obs, RADII, beta=-0.3)
-    p_combined = forward_model_combined(5.0, -0.1, 0.0, cluster_obs, RADII, beta=-0.3)
+    p_combined = forward_model_combined(5.0, -0.1, 0.0, cluster_obs, RADII, beta_cm=-0.3)
     np.testing.assert_allclose(p_combined, p_mc, rtol=1e-10)
 
 

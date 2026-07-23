@@ -11,13 +11,10 @@ import numpy as np
 from scipy.stats import gaussian_kde
 
 
-def plot_gamma_scan_results(scan_results, run_dir, n_clusters, n_bootstrap,
-                            bin_size=10):
+def plot_gamma_scan_results(scan_results, run_dir, n_clusters, n_bootstrap):
     """Two-panel: top = true vs estimated; bottom = residuals.  Each panel
-    overlays the median in bins of `bin_size` consecutive γ_true points
-    (sorted), a 68% credible band from the within-bin 16th/84th
-    percentiles, and a linear (γ_est vs γ_true) least-squares fit so the
-    overall slope-1 and offset-0 deviations are quantified."""
+    overlays a linear (γ_est vs γ_true) least-squares fit so the overall
+    slope-1 and offset-0 deviations are quantified."""
     gamma_true = np.array([r["gamma_true"]          for r in scan_results])
     gamma_est  = np.array([r["gamma_ensemble_med"]   for r in scan_results])
     sigma_boot = np.array([r["sigma_gamma"]           for r in scan_results])
@@ -43,37 +40,6 @@ def plot_gamma_scan_results(scan_results, run_dir, n_clusters, n_bootstrap,
     fit_slope_err  = float(np.sqrt(cov[0, 0]))
     fit_offset_err = float(np.sqrt(cov[1, 1]))
 
-    # Binned median + 68% band in bins of `bin_size` consecutive points
-    n = len(g_t)
-    bin_edges = np.arange(0, n + bin_size, bin_size)
-    bin_edges = bin_edges[bin_edges <= n]
-    if bin_edges[-1] != n:
-        bin_edges = np.append(bin_edges, n)
-    bin_centres_x = []
-    bin_med_est   = []
-    bin_lo_est    = []
-    bin_hi_est    = []
-    bin_med_res   = []
-    bin_lo_res    = []
-    bin_hi_res    = []
-    for s, e in zip(bin_edges[:-1], bin_edges[1:]):
-        if e - s < 1:
-            continue
-        bin_centres_x.append(float(np.median(g_t[s:e])))
-        bin_med_est.append(float(np.median(g_e[s:e])))
-        bin_lo_est.append(float(np.percentile(g_e[s:e], 16)))
-        bin_hi_est.append(float(np.percentile(g_e[s:e], 84)))
-        bin_med_res.append(float(np.median(residuals[s:e])))
-        bin_lo_res.append(float(np.percentile(residuals[s:e], 16)))
-        bin_hi_res.append(float(np.percentile(residuals[s:e], 84)))
-    bin_centres_x = np.asarray(bin_centres_x)
-    bin_med_est   = np.asarray(bin_med_est)
-    bin_lo_est    = np.asarray(bin_lo_est)
-    bin_hi_est    = np.asarray(bin_hi_est)
-    bin_med_res   = np.asarray(bin_med_res)
-    bin_lo_res    = np.asarray(bin_lo_res)
-    bin_hi_res    = np.asarray(bin_hi_res)
-
     fig, (ax_top, ax_bot) = plt.subplots(
         2, 1, figsize=(8, 10),
         gridspec_kw={"height_ratios": [3, 2]}, sharex=True,
@@ -90,12 +56,6 @@ def plot_gamma_scan_results(scan_results, run_dir, n_clusters, n_bootstrap,
         alpha=0.35, zorder=3,
         label=r"individual $\hat\gamma$ ± $\sigma_{\rm boot}$",
     )
-    ax_top.fill_between(bin_centres_x, bin_lo_est, bin_hi_est,
-                        color="purple", alpha=0.18, lw=0,
-                        label=f"68% CL (bins of {bin_size})", zorder=4)
-    ax_top.plot(bin_centres_x, bin_med_est, "o-", color="purple", lw=1.6,
-                markersize=6, zorder=5,
-                label=f"median estimate (bins of {bin_size})")
     ax_top.plot(g_grid, (1.0 + fit_slope) * g_grid + fit_offset,
                 color="crimson", lw=2.0, zorder=6,
                 label=(rf"fit: slope−1 = {fit_slope:+.3f} ± {fit_slope_err:.3f}, "
@@ -129,11 +89,6 @@ def plot_gamma_scan_results(scan_results, run_dir, n_clusters, n_bootstrap,
     )
     ax_bot.axhspan(-mean_sigma, mean_sigma, alpha=0.10, color="tomato",
                    label=rf"$\langle\sigma_{{\rm boot}}\rangle = {mean_sigma:.4f}$")
-    ax_bot.fill_between(bin_centres_x, bin_lo_res, bin_hi_res,
-                        color="purple", alpha=0.18, lw=0,
-                        label=f"68% CL (bins of {bin_size})")
-    ax_bot.plot(bin_centres_x, bin_med_res, "o-", color="purple", lw=1.6,
-                markersize=6, label=f"median residual (bins of {bin_size})")
     ax_bot.plot(g_grid, fit_slope * g_grid + fit_offset,
                 color="crimson", lw=2.0,
                 label=(rf"fit: slope = {fit_slope:+.3f} ± {fit_slope_err:.3f}, "
@@ -220,3 +175,127 @@ def plot_posteriors_overlay(results, sim_subdir, gamma_true, gamma_prior,
     out = os.path.join(sim_subdir, "posteriors_overlay.png")
     fig.savefig(out, dpi=130, bbox_inches="tight")
     plt.close(fig)
+
+
+def overlay_priors_on_corner(fig, param_order, priors, color="darkorange"):
+    """Draw each sampled parameter's prior pdf on the diagonal (1D) panel
+    of an already-built ``corner.corner`` figure, on the same probability-
+    density scale as the posterior histogram — for that to be a fair
+    comparison, the figure must have been built with
+    ``hist_kwargs={'density': True}`` (both plot_combined_corner and
+    gamma_inference.run_one_bootstrap's per-fit corner plot do this).
+
+    Diagonal axes of an N-parameter corner.corner figure sit at
+    ``fig.axes[i*N + i]`` for i in range(N) (row-major N x N grid; the
+    upper-triangle axes exist but are left blank by corner.corner).
+
+    Parameters
+    ----------
+    fig : matplotlib.figure.Figure
+        Output of ``corner.corner``.
+    param_order : list of str
+        Column names in the same order as the figure's parameters.
+    priors : dict[str, scipy.stats distribution]
+        Only entries whose name is in ``param_order`` and which expose a
+        ``.pdf`` method are drawn; everything else is silently skipped
+        (e.g. this figure's fixed parameters, which never appear in
+        param_order in the first place).
+    color : str
+        Line color; default matches the prior convention used elsewhere
+        in this module (peak-normalised overlay in
+        ``plot_posteriors_overlay``).
+
+    Returns True if at least one prior curve was drawn.
+    """
+    k = len(param_order)
+    if len(fig.axes) < k * k:
+        return False
+    line = None
+    for i, name in enumerate(param_order):
+        dist = priors.get(name)
+        if dist is None or not hasattr(dist, "pdf"):
+            continue
+        ax = fig.axes[i * k + i]
+        xlo, xhi = ax.get_xlim()
+        ylo, yhi = ax.get_ylim()
+        x = np.linspace(xlo, xhi, 300)
+        try:
+            y = dist.pdf(x)
+        except Exception:
+            continue
+        # Pin the axis frame back to what the histogram established: the
+        # prior curve is drawn within that frame (clipped if taller), so
+        # it never distorts the panel's zoom onto the posterior.
+        (line,) = ax.plot(x, y, color=color, lw=1.5, ls="--", zorder=5)
+        ax.set_xlim(xlo, xhi)
+        ax.set_ylim(ylo, yhi)
+    if line is not None:
+        fig.legend([line], ["Prior"], loc="upper right", fontsize=10,
+                  bbox_to_anchor=(0.98, 0.98))
+        return True
+    return False
+
+
+def plot_combined_corner(samples, weights, param_order, out_path,
+                         labels=None, truths=None, gamma_true=None,
+                         n_bootstrap=None, n_clusters=None, priors=None):
+    """Corner plot of the MIXTURE posterior over every fit parameter,
+    pooling samples from all bootstrap fits of one gamma point (equal
+    weight per bootstrap, matching the gamma-only combination).
+
+    Parameters
+    ----------
+    samples : ndarray (n_pooled, n_params)
+        Concatenated ``all_samples`` from every included bootstrap.
+    weights : ndarray (n_pooled,)
+        Concatenated, renormalised (per-bootstrap then jointly) weights,
+        same convention as the pooling used for the gamma-only mixture.
+    param_order : list of str
+        Column names of ``samples``, in order.
+    labels, truths : list or None
+        Passed straight to ``corner.corner`` (axis labels, truth-value
+        lines); default to ``param_order`` names and no truth lines.
+    priors : dict[str, scipy.stats distribution] or None
+        When given, each sampled parameter's prior pdf is overlaid on its
+        1D diagonal panel (see ``overlay_priors_on_corner``).
+
+    Returns the output path, or None if the ``corner`` package is
+    unavailable or plotting fails (caught, not raised — a missing plot
+    should never fail a fitting run).
+    """
+    try:
+        import corner as _corner
+    except ImportError:
+        return None
+    try:
+        fig = _corner.corner(
+            samples, weights=weights,
+            labels=labels if labels is not None else list(param_order),
+            truths=truths,
+            truth_color="crimson",
+            quantiles=[0.16, 0.50, 0.84],
+            show_titles=True, title_fmt=".3f",
+            plot_datapoints=False, fill_contours=True,
+            levels=(0.39, 0.86),
+            smooth=1.0,
+            hist_kwargs={"density": True},
+        )
+        if priors:
+            overlay_priors_on_corner(fig, param_order, priors)
+        title_bits = []
+        if gamma_true is not None:
+            title_bits.append(rf"$\gamma_{{\rm true}}={gamma_true:+.3f}$")
+        if n_clusters is not None:
+            title_bits.append(rf"$N={n_clusters}$")
+        if n_bootstrap is not None:
+            title_bits.append(f"{n_bootstrap} bootstraps combined")
+        fig.suptitle(
+            "combined posterior" + (("  (" + ", ".join(title_bits) + ")")
+                                    if title_bits else ""),
+            y=1.02, fontsize=11,
+        )
+        fig.savefig(out_path, dpi=120, bbox_inches="tight")
+        plt.close(fig)
+        return out_path
+    except Exception:
+        return None

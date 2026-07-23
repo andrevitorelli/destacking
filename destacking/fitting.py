@@ -6,6 +6,7 @@ from destacking.model import (
 )
 
 from scipy.stats import truncnorm as sp_truncnorm, norm as sp_norm, uniform as sp_uniform
+from scipy.stats import gaussian_kde
 
 
 def cholog_gaussian(data_vectors, cov_matrices):
@@ -316,17 +317,19 @@ def run_sampler_mc(
 
 def log_likelihood_combined(
     c0,
-    alpha,
-    gamma,
+    alpha_cm,
+    gamma_cm,
     cluster_table,
     data_vectors,
     cov_matrices,
     radii,
-    beta=0.0,
+    beta_cm=0.0,
     M_pivot_log=_MC_M_PIVOT_LOG,
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
     log_M_norm=0.0,
+    alpha_mr=1.356,
+    beta_mr=-0.30,
     A=1.0,
     FMISS=None,
     SIGMA_OFF=None,
@@ -337,8 +340,10 @@ def log_likelihood_combined(
 
     FMISS, SIGMA_OFF, BCG_B_MASS are passed through to forward_model_combined
     as fixed per-cluster miscentering / BCG arrays.  Default None means
-    centered NFW with no BCG.  ``A`` is a global multiplicative amplitude
-    correction (default 1.0).
+    centered NFW with no BCG.  ``alpha_mr``/``beta_mr`` are the
+    mass-richness relation's richness/redshift slopes (default McClintock+18
+    values).  ``A`` is a global multiplicative amplitude correction
+    (default 1.0).
 
     Returns -inf for unphysical c0 or A, for NaN/inf in the forward model,
     or if the forward model raises.  Never returns NaN.
@@ -347,9 +352,10 @@ def log_likelihood_combined(
         return -np.inf
     try:
         model     = forward_model_combined(
-            c0, alpha, gamma, cluster_table, radii,
-            beta=beta, M_pivot_log=M_pivot_log, z_ref=z_ref,
-            delta_m_ref=delta_m_ref, log_M_norm=log_M_norm, A=A,
+            c0, alpha_cm, gamma_cm, cluster_table, radii,
+            beta_cm=beta_cm, M_pivot_log=M_pivot_log, z_ref=z_ref,
+            delta_m_ref=delta_m_ref, log_M_norm=log_M_norm,
+            alpha_mr=alpha_mr, beta_mr=beta_mr, A=A,
             FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
         )
         if not np.all(np.isfinite(model)):
@@ -361,12 +367,34 @@ def log_likelihood_combined(
         return -np.inf
 
 
+# Every parameter the combined model exposes, in the order they are added
+# to the nautilus Prior when sampled.  c0, alpha_cm, gamma_cm and
+# log_M_norm have no hardcoded default: legacy callers relying on the old
+# "always required" behaviour must still supply them via `priors` (or,
+# now, `fixed`).  The other entries default exactly to the pre-existing
+# hardcoded behaviour (beta_cm=0, A=1, McClintock+18 alpha_mr/beta_mr) so
+# old callers that never heard of these new knobs are unaffected.
+#
+# Naming: _cm = mass-concentration relation, _mr = mass-richness relation
+# (both parametrised by an alpha/beta slope pair, plus gamma_cm for the
+# magnitude-gap slope) -- distinct namespaces so both relations can be fit
+# simultaneously without name collisions.
+_COMBINED_PARAMS = (
+    'c0', 'alpha_cm', 'beta_cm', 'gamma_cm', 'log_M_norm',
+    'alpha_mr', 'beta_mr', 'A',
+)
+_COMBINED_PARAM_SOFT_DEFAULTS = {
+    'beta_cm': 0.0, 'A': 1.0, 'alpha_mr': 1.356, 'beta_mr': -0.30,
+}
+
+
 def run_sampler_combined(
     cluster_table,
     data_vectors,
     cov_matrices,
     radii,
     priors=None,
+    fixed=None,
     # Legacy individual kwargs — used only when priors is None
     c0_prior_loc=5.0,
     c0_prior_scale=5.0,
@@ -382,7 +410,8 @@ def run_sampler_combined(
     z_ref=_MC_Z_REF,
     delta_m_ref=_MC_DM_REF,
     fit_beta=True,
-    # Fixed per-cluster miscentering / BCG arrays (not sampled)
+    # Fixed per-cluster miscentering / BCG arrays (legacy pathway; prefer
+    # 'f_mis'/'sigma_off' in priors/fixed — see below)
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
@@ -396,13 +425,45 @@ def run_sampler_combined(
     """
     Run the nautilus nested sampler for the combined M–c + magnitude-gap model.
 
-    Simultaneously constrains c0 (normalisation), alpha (mass slope),
-    optionally beta (redshift evolution), gamma (magnitude-gap slope [dex/mag]),
-    and log_M_norm (mass-richness calibration offset).
+    Every parameter the model exposes — c0, alpha_cm, beta_cm, gamma_cm,
+    log_M_norm (mass-concentration relation + mass normalisation),
+    alpha_mr, beta_mr (mass-richness relation), f_mis, sigma_off
+    (population-level miscentering) — is either SAMPLED (its name is a key
+    of ``priors``, mapping to a frozen ``scipy.stats`` distribution) or
+    FIXED (its name is a key of ``fixed``, mapping to a precise float). A
+    parameter named in neither raises immediately, except for the soft-
+    defaulted legacy set {beta_cm, A, alpha_mr, beta_mr} (see below) and
+    f_mis/sigma_off, which fall back to the FMISS/SIGMA_OFF array kwargs
+    when unaddressed — there is no other silent default.
 
-    The recommended way to declare priors is via the ``priors`` dict.  For
-    backward compatibility, when ``priors=None`` the function builds an
-    equivalent dict from the individual ``*_prior_*`` legacy kwargs.
+    ``gamma_cm`` and ``c0`` have no default at all: they must always appear
+    in ``priors`` or ``fixed``. ``alpha_cm``/``log_M_norm`` are likewise
+    always required — this reproduces the historical "always required"
+    behaviour of this function, with ``fixed`` now offering an explicit
+    alternative to sampling for any of them. ``beta_cm``/``A``/
+    ``alpha_mr``/``beta_mr`` silently default to their pre-existing
+    hardcoded values (0, 1, 1.356, -0.30) when addressed by neither dict,
+    purely for backward compatibility with callers written before those
+    parameters existed as fittable knobs.
+
+    ``f_mis``/``sigma_off`` (population-level miscentering: one value
+    applied to every cluster, not fit per cluster) are special-cased: when
+    'f_mis' is a key of ``priors``, both it and 'sigma_off' must be (they
+    are sampled together); when 'f_mis' is a key of ``fixed``, both it and
+    'sigma_off' must be; otherwise the legacy per-cluster FMISS/SIGMA_OFF
+    array kwargs are used as before (default None -> centered, 0.1 Mpc).
+
+    Parameter order in ``sampler.posterior()``'s point array — and hence in
+    ``sampler.param_order``, the definitive list this function attaches to
+    the returned sampler — is ``_COMBINED_PARAMS`` order (c0, alpha_cm,
+    beta_cm, gamma_cm, log_M_norm, alpha_mr, beta_mr, A), filtered to
+    whichever of those are actually sampled, with f_mis/sigma_off appended
+    last if sampled.
+
+    The recommended way to declare priors is via the ``priors``/``fixed``
+    dicts.  For backward compatibility, when ``priors`` is ``None`` the
+    function builds an equivalent dict from the individual ``*_prior_*``
+    legacy kwargs (c0, alpha_cm, beta_cm, gamma_cm, log_M_norm all sampled).
 
     Parameters
     ----------
@@ -414,35 +475,37 @@ def run_sampler_combined(
     priors : dict[str, scipy.stats distribution] or None
         Mapping from parameter name to a frozen ``scipy.stats`` distribution
         (anything that exposes ``.pdf`` and is accepted by
-        ``nautilus.Prior.add_parameter``).
-        Required keys: ``'c0'``, ``'alpha'``, ``'gamma'``, ``'log_M_norm'``.
-        Required additionally when ``fit_beta=True``: ``'beta'``.
-        Optional: ``'A'`` --- global multiplicative amplitude correction.
-        If supplied, A is sampled and appended at the END of the parameter
-        order (after log_M_norm), preserving the indexing of every earlier
-        parameter.  If absent, A is fixed at 1.0.
+        ``nautilus.Prior.add_parameter``) for every SAMPLED parameter.
         Example::
 
-            from scipy.stats import norm, truncnorm
+            from scipy.stats import norm, truncnorm, uniform
             priors = {
                 'c0':         norm(loc=5.0, scale=5.0),
-                'alpha':      norm(loc=0.0, scale=0.5),
-                'beta':       norm(loc=0.0, scale=1.0),
-                'gamma':      truncnorm(a=-2, b=2, loc=0.0, scale=0.5),
+                'alpha_cm':   norm(loc=0.0, scale=0.5),
+                'beta_cm':    norm(loc=0.0, scale=1.0),
+                'gamma_cm':   truncnorm(a=-2, b=2, loc=0.0, scale=0.5),
                 'log_M_norm': norm(loc=0.0, scale=0.1),
-                'A':          norm(loc=0.80, scale=0.02),   # optional
+                'alpha_mr':   norm(loc=1.356, scale=0.1),     # optional
+                'f_mis':      uniform(loc=0.0, scale=1.0),    # optional
+                'sigma_off':  uniform(loc=0.05, scale=1.45),  # required with f_mis
             }
         Default ``None`` — fall back to the individual legacy kwargs below.
+    fixed : dict[str, float] or None
+        Mapping from parameter name to a precise fixed value, for every
+        FIXED (not sampled) parameter you want to control explicitly
+        instead of relying on the soft defaults above.  Example::
+
+            fixed = {'beta_cm': -0.4018, 'alpha_mr': 1.2, 'beta_mr': -0.25}
     c0_prior_loc, c0_prior_scale : float
         Gaussian prior on c0 (legacy, used only when ``priors`` is None).
     alpha_prior_loc, alpha_prior_scale : float
-        Gaussian prior on alpha (legacy).
+        Gaussian prior on alpha_cm (legacy).
     beta_prior_loc, beta_prior_scale : float
-        Gaussian prior on beta (legacy).  Ignored when fit_beta=False.
+        Gaussian prior on beta_cm (legacy).  Ignored when fit_beta=False.
     gamma_range : (float, float)
-        Truncation bounds for the TruncNormal prior on gamma (legacy).
+        Truncation bounds for the TruncNormal prior on gamma_cm (legacy).
     gamma_prior_sigma : float
-        Sigma of the TruncNormal prior on gamma, centred at 0 (legacy).
+        Sigma of the TruncNormal prior on gamma_cm, centred at 0 (legacy).
     log_M_norm_sigma : float
         Gaussian prior sigma on log_M_norm [dex] (legacy).
     M_pivot_log, z_ref : float
@@ -450,19 +513,22 @@ def run_sampler_combined(
     delta_m_ref : float
         Reference magnitude gap [mag].  Default 1.0.
     fit_beta : bool
-        If True, include beta as a free parameter.
-        Parameter order: c0, alpha, beta, gamma, log_M_norm, [A].
-        If False, fix beta = 0.
-        Parameter order: c0, alpha, gamma, log_M_norm, [A].
-        A is appended only when ``priors`` contains an ``'A'`` key.
+        Legacy shim, only consulted when 'beta_cm' is in neither ``priors``
+        nor ``fixed``: if False, fixes beta_cm=0 (matches the pre-
+        ``fixed``-dict behaviour); if True (default), beta_cm falls
+        through to its soft default of 0 anyway, so this is a no-op in the
+        new pathway.
     FMISS : array_like (N,) or None
-        Per-cluster miscentered-signal fraction.  Held fixed (not sampled).
+        Legacy per-cluster miscentered-signal fraction, used only when
+        f_mis is addressed by neither ``priors`` nor ``fixed``.
         Default None → zeros (centered NFW).
     SIGMA_OFF : array_like (N,) or None
-        Per-cluster Rayleigh scale of the miscentering offset distribution
-        [Mpc].  Held fixed.  Default None → 0.1 Mpc (irrelevant when FMISS=0).
+        Legacy per-cluster Rayleigh scale of the miscentering offset
+        [Mpc], used only when sigma_off is addressed by neither ``priors``
+        nor ``fixed``.  Default None → 0.1 Mpc (irrelevant when FMISS=0).
     BCG_B_MASS : array_like (N,) or None
-        Per-cluster baryonic BCG mass [M_sun].  Held fixed.  Default None → 0.
+        Per-cluster baryonic BCG mass [M_sun].  Always fixed (not
+        fittable).  Default None → 0.
     n_live : int
     pool : int or None
     verbose : bool
@@ -482,6 +548,10 @@ def run_sampler_combined(
     -------
     sampler : nautilus.Sampler
         Completed sampler.  Call sampler.posterior() for samples.
+        ``sampler.param_order`` is the list of sampled parameter names, in
+        the exact order of the columns returned by ``sampler.posterior()``.
+        ``sampler.converged`` is True unless nautilus stopped on the
+        timeout/n_like_max rather than actual convergence.
     """
     from nautilus import Prior, Sampler
 
@@ -491,63 +561,74 @@ def run_sampler_combined(
         b = (hi - 0.0) / gamma_prior_sigma
         priors = {
             'c0':         sp_norm(loc=c0_prior_loc,    scale=c0_prior_scale),
-            'alpha':      sp_norm(loc=alpha_prior_loc, scale=alpha_prior_scale),
-            'beta':       sp_norm(loc=beta_prior_loc,  scale=beta_prior_scale),
-            'gamma':      sp_truncnorm(a=a, b=b, loc=0.0, scale=gamma_prior_sigma),
+            'alpha_cm':   sp_norm(loc=alpha_prior_loc, scale=alpha_prior_scale),
+            'beta_cm':    sp_norm(loc=beta_prior_loc,  scale=beta_prior_scale),
+            'gamma_cm':   sp_truncnorm(a=a, b=b, loc=0.0, scale=gamma_prior_sigma),
             'log_M_norm': sp_norm(loc=0.0, scale=log_M_norm_sigma),
         }
+    priors = dict(priors)
+    fixed  = dict(fixed) if fixed is not None else {}
 
-    required = {'c0', 'alpha', 'gamma', 'log_M_norm'}
-    if fit_beta:
-        required.add('beta')
-    missing = required - set(priors)
+    # fit_beta legacy shim: only matters if beta_cm is otherwise unaddressed.
+    if not fit_beta and 'beta_cm' not in priors and 'beta_cm' not in fixed:
+        fixed['beta_cm'] = 0.0
+
+    always_required = ('c0', 'alpha_cm', 'gamma_cm', 'log_M_norm')
+    missing = [n for n in always_required
+              if n not in priors and n not in fixed]
     if missing:
         raise KeyError(
-            f"priors dict is missing required keys: {sorted(missing)}"
+            f"the following parameters need either a prior (to sample) or "
+            f"a fixed value: {sorted(missing)}"
         )
+    for name, default in _COMBINED_PARAM_SOFT_DEFAULTS.items():
+        if name not in priors and name not in fixed:
+            fixed[name] = default
 
-    nprior = Prior()
-    nprior.add_parameter('c0',    dist=priors['c0'])
-    nprior.add_parameter('alpha', dist=priors['alpha'])
-    if fit_beta:
-        nprior.add_parameter('beta', dist=priors['beta'])
-    nprior.add_parameter('gamma',      dist=priors['gamma'])
-    nprior.add_parameter('log_M_norm', dist=priors['log_M_norm'])
-    sample_A = 'A' in priors
-    if sample_A:
-        nprior.add_parameter('A', dist=priors['A'])
-    # Optional population-level miscentering: when the priors dict contains
-    # 'f_mis' (global miscentered fraction) and 'sigma_off' (global offset
-    # Rayleigh scale [Mpc]), both are SAMPLED and override the fixed
-    # FMISS / SIGMA_OFF arrays.  They remain population parameters — the
-    # same value is applied to every cluster, not fit per cluster.
-    # Parameter order: appended after log_M_norm (and A, if sampled), so
-    # the indices of all earlier parameters are unchanged.
-    sample_mis = ('f_mis' in priors) or ('sigma_off' in priors)
-    if sample_mis and not ('f_mis' in priors and 'sigma_off' in priors):
+    sample_mis_prior = ('f_mis' in priors) or ('sigma_off' in priors)
+    if sample_mis_prior and not ('f_mis' in priors and 'sigma_off' in priors):
         raise KeyError("sampling miscentering requires both 'f_mis' and "
                        "'sigma_off' priors")
-    if sample_mis:
+    fixed_mis = ('f_mis' in fixed) or ('sigma_off' in fixed)
+    if fixed_mis and not ('f_mis' in fixed and 'sigma_off' in fixed):
+        raise KeyError("fixing miscentering requires both 'f_mis' and "
+                       "'sigma_off' values")
+
+    nprior = Prior()
+    for name in _COMBINED_PARAMS:
+        if name in priors:
+            nprior.add_parameter(name, dist=priors[name])
+    if sample_mis_prior:
         nprior.add_parameter('f_mis',     dist=priors['f_mis'])
         nprior.add_parameter('sigma_off', dist=priors['sigma_off'])
+    param_order = list(nprior.keys)
+
     n_cl = len(data_vectors)
 
+    def _val(p, name):
+        return p[name] if name in p else fixed[name]
+
     def _loglike(p):
-        if sample_mis:
+        if 'f_mis' in p:
             fmiss_arr = np.full(n_cl, p['f_mis'])
             soff_arr  = np.full(n_cl, p['sigma_off'])
+        elif fixed_mis:
+            fmiss_arr = np.full(n_cl, fixed['f_mis'])
+            soff_arr  = np.full(n_cl, fixed['sigma_off'])
         else:
             fmiss_arr = FMISS
             soff_arr  = SIGMA_OFF
         return log_likelihood_combined(
-            p['c0'], p['alpha'], p['gamma'],
+            _val(p, 'c0'), _val(p, 'alpha_cm'), _val(p, 'gamma_cm'),
             cluster_table, data_vectors, cov_matrices, radii,
-            beta=p.get('beta', 0.0),
+            beta_cm=_val(p, 'beta_cm'),
             M_pivot_log=M_pivot_log,
             z_ref=z_ref,
             delta_m_ref=delta_m_ref,
-            log_M_norm=p['log_M_norm'],
-            A=p.get('A', 1.0),
+            log_M_norm=_val(p, 'log_M_norm'),
+            alpha_mr=_val(p, 'alpha_mr'),
+            beta_mr=_val(p, 'beta_mr'),
+            A=_val(p, 'A'),
             FMISS=fmiss_arr,
             SIGMA_OFF=soff_arr,
             BCG_B_MASS=BCG_B_MASS,
@@ -562,7 +643,65 @@ def run_sampler_combined(
     # nautilus returns False when stopped by timeout/n_like_max rather
     # than convergence.  Exposed as an attribute to keep the return
     # signature unchanged for existing callers.
-    sampler.converged = bool(converged)
+    sampler.converged   = bool(converged)
+    sampler.param_order = param_order
+    # Information gain from prior to posterior, in nats, via the nested-
+    # sampling identity D_KL(posterior || prior) = <log L>_posterior - log Z
+    # (same convention used in notebooks/wazp_mass_richness_by_delta_m.ipynb).
+    # Always computed and attached so every caller gets it for free.
+    try:
+        _points, _log_w, _log_l = sampler.posterior()
+        _w = np.exp(_log_w - _log_w.max())
+        _w = _w / _w.sum()
+        _finite = np.isfinite(_log_l)
+        if _finite.any():
+            sampler.kl_nats = float(
+                np.sum(_w[_finite] * _log_l[_finite]) - sampler.log_z
+            )
+            # Per-parameter marginal KL(posterior_i || prior_i): weighted
+            # 1D KDE of the marginal posterior evaluated against the
+            # analytic prior pdf, Monte-Carlo averaged over the posterior
+            # samples themselves.  Priors are independent across sampled
+            # parameters, so joint_kl - sum(marginal_kl) is the mutual
+            # information the data induced between them — i.e. how much
+            # of the total information gain went into correlations /
+            # degeneracies (e.g. mass-concentration) rather than pinning
+            # down individual parameters.
+            _wf = _w[_finite]
+            _wf = _wf / _wf.sum()
+            marginal_kl = {}
+            for i, name in enumerate(param_order):
+                try:
+                    x = _points[_finite, i]
+                    # np.log(kde.pdf(x)), not kde.logpdf(x): the latter is
+                    # broken for weighted KDEs on some scipy builds (returns
+                    # all-NaN despite a well-conditioned covariance/factor).
+                    # Clip the density away from exactly 0 first: an
+                    # isolated low-weight tail sample can otherwise
+                    # underflow to log(0) = -inf, which combined with its
+                    # (near-)zero weight in the sum is a 0 * -inf -> NaN.
+                    pdf_q = gaussian_kde(x, weights=_wf).pdf(x)
+                    log_q = np.log(np.clip(pdf_q, 1e-300, None))
+                    log_p = priors[name].logpdf(x)
+                    marginal_kl[name] = float(np.sum(_wf * (log_q - log_p)))
+                except Exception:
+                    marginal_kl[name] = float("nan")
+            sampler.marginal_kl_nats = marginal_kl
+            _finite_marg = [v for v in marginal_kl.values() if np.isfinite(v)]
+            sampler.kl_residual_nats = (
+                float(sampler.kl_nats - sum(_finite_marg))
+                if np.isfinite(sampler.kl_nats)
+                and len(_finite_marg) == len(marginal_kl)
+                else float("nan")
+            )
+        else:
+            sampler.kl_nats = float("nan")
+            sampler.marginal_kl_nats = {n: float("nan") for n in param_order}
+            sampler.kl_residual_nats = float("nan")
+    except Exception:
+        sampler.kl_nats = float("nan")
+        sampler.marginal_kl_nats = {n: float("nan") for n in param_order}
+        sampler.kl_residual_nats = float("nan")
     return sampler
 
 
@@ -635,7 +774,7 @@ def log_likelihood_combined_resampled(
     return log_likelihood_combined(
         c0, alpha, gamma,
         sub_table, sub_dv, sub_cov, radii,
-        beta=beta,
+        beta_cm=beta,
         M_pivot_log=M_pivot_log,
         z_ref=z_ref,
         delta_m_ref=delta_m_ref,
