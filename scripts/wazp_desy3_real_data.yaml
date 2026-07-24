@@ -1,0 +1,57 @@
+# prepare_real_data.py run: WaZP clusters + DES-Y3 metacal/DNF -> a
+# gamma_inference.py data_folder.
+#
+# Usage: python prepare_real_data.py wazp_desy3_real_data.yaml
+
+# ═══ Cluster catalogue ═══════════════════════════════════════════════════
+# No pre-built compact catalogue yet, so build it from the raw WaZP FITS
+# catalogues (both given below) and cache the result here.
+cluster_catalog_file: data/wazp_real_data.fits
+clusters_file: /mnt/c/Users/andre/DATA/y6a2_dnf_wazp_v5.0.12.6801_clusters.fits
+members_file:  /mnt/c/Users/andre/DATA/y6a2_dnf_wazp_v5.0.12.6801_members.fits
+
+richness_min: 25
+z_max:        0.7
+require_bcg:  true
+mag_gap_r_cut_mpc: 0.5
+
+delta_m_min: 0.0
+
+# ═══ Source catalogue (DES-Y3 metacalibration) ════════════════════════════
+metacal_file: /mnt/c/Users/andre/DATA/DESY3_metacal_v03-004.h5
+dnf_file:     /mnt/c/Users/andre/DATA/DESY3_GOLD_2_2.1_DNF.h5
+
+filtered_cache: data/metacal_filtered.npz
+chunk_read: 10000000
+
+# ═══ Measurement ═══════════════════════════════════════════════════════════
+radius_mpc: 5.0
+
+# Background-galaxy selection strategy (caller-side; xlensing itself no
+# longer filters by redshift — see destacking.data.select_background).
+# Explicit here even though these are the defaults: this is the baseline
+# strategy against which alternatives get compared, per the foreground-
+# contamination hypothesis in project memory
+# wazp-desy3-root-cause-hypotheses.
+background_strategy: margin
+background_strategy_kwargs:
+  factor: 1.1
+  offset: 0.2
+
+# Matches the sim/fit grid convention used throughout gamma_inference.py's
+# example configs (sim_log_inner_radius/-outer/-n_radii defaults).
+log_inner_radius: -0.8
+log_outer_radius:  0.6
+n_radii:           8
+
+n_cov_bootstrap: 200
+min_sources: 20
+
+n_workers: 12
+checkpoint_every: 1000
+use_cache: true
+
+# ═══ Output ══════════════════════════════════════════════════════════════
+out_dir: gamma_scan_outputs/wazp_real_data
+g_idx: 0
+gamma_true: 0.0
