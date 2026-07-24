@@ -532,8 +532,10 @@ def _process_cluster(i):
     2. Assign DES Y3-like source redshifts (Smail distribution), lognormal
        metacal responses, and intrinsic shapes (per-component Gaussian
        with RMS ``cfg.shape_noise``, redrawn until |e| < 1).
-    3. Cut to sources behind the cluster (z_s > 1.1 z_l + 0.2, matching the
-       metacal selection inside xlensing).
+    3. Cut to sources behind the cluster (z_s > 1.1 z_l + 0.2 — the
+       "margin" background-selection strategy's default; this is the only
+       place that filter is applied, since metacal_cluster_lensing itself
+       no longer filters by redshift).
     4. Shear the sources with the triaxial NFW model using the cluster's
        true (M, c, shape, orientation), scaling each galaxy's shear by its
        metacal response so the response-corrected estimator is unbiased;
@@ -622,8 +624,14 @@ def _process_cluster(i):
     gal_i[:, 3] = e1
     gal_i[:, 4] = e2
 
-    # Stage 3 — keep only sources behind the cluster.  Same cut as the
-    # metacal path in xlensing, applied early so we only shear survivors.
+    # Stage 3 — keep only sources behind the cluster, applied early so we
+    # only shear survivors. This is the "margin" background-selection
+    # strategy (destacking.data.background_mask_margin's default
+    # factor/offset) applied directly rather than via that helper, since
+    # this is per-galaxy array code, not a call into metacal_cluster_lensing
+    # (which itself applies no redshift filtering any more — see
+    # destacking.data.select_background and project memory
+    # "xlensing background selection moved to caller").
     mc_mask = gal_i[:, 2] > 1.1 * z_i + 0.2
     gal_mc  = gal_i[mc_mask]
     if len(gal_mc) < 20:

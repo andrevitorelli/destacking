@@ -34,6 +34,14 @@ galaxy-level bootstrap gives the data vector and covariance from the same
 estimator, with no boost, exactly matching what the simulation pipeline in
 destacking.simulation produces for synthetic clusters.
 
+Background-galaxy selection happens here, NOT inside xlensing:
+xlensing.data.metacal_cluster_lensing no longer filters sources by
+redshift internally (that hardcoded cut was removed so it can be
+controlled and compared from the caller). ``background_strategy`` /
+``background_strategy_kwargs`` select and parameterise the selection
+(destacking.data.select_background); the default ("margin", factor=1.1,
+offset=0.2) reproduces the old hardcoded xlensing behaviour exactly.
+
 Usage
 -----
     python prepare_real_data.py my_real_data_config.yaml
@@ -334,6 +342,8 @@ _RADIUS_MPC   = None
 _BIN_LIMITS   = None
 _N_COV_BOOT   = None
 _MIN_SOURCES  = None
+_BG_STRATEGY  = None
+_BG_KWARGS    = None
 
 
 def _measure_cluster(args):
@@ -343,6 +353,7 @@ def _measure_cluster(args):
     (i, dv, cov, n_src) or (i, None, None, 0) on failure."""
     import xlensing.cosmo as _xlc
     from xlensing.data import bootstrap_signal, metacal_cluster_lensing
+    from destacking.data import select_background
 
     i, cid, ra_deg, dec_deg, z_cl = args
     try:
@@ -352,6 +363,16 @@ def _measure_cluster(args):
             return i, None, None, 0
         ang_r = _RADIUS_MPC / D_A
         idx = _TREE.query_radius(np.array([[dec_r, ra_r]]), r=ang_r)[0]
+        if len(idx) == 0:
+            return i, None, None, 0
+
+        # Background selection is caller-side now — xlensing applies no
+        # redshift filtering of its own (see project memory
+        # "xlensing background selection moved to caller"). Apply the
+        # configured strategy before building the source tuple.
+        bg_mask = select_background(_BG_STRATEGY, _SR["z"][idx], z_cl,
+                                    **_BG_KWARGS)
+        idx = idx[bg_mask]
         if len(idx) == 0:
             return i, None, None, 0
 
@@ -395,6 +416,7 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     ``<sim_subdir>/.partial.npz`` every ``checkpoint_every`` clusters and
     reloaded on a matching re-run (gated by use_cache)."""
     global _TREE, _SR, _RADIUS_MPC, _BIN_LIMITS, _N_COV_BOOT, _MIN_SOURCES
+    global _BG_STRATEGY, _BG_KWARGS
     import multiprocess as mp
     from sklearn.neighbors import BallTree
 
@@ -404,6 +426,14 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     n_workers        = _cfg(cfg, "n_workers", 8, cast=int)
     checkpoint_every  = _cfg(cfg, "checkpoint_every", 1000, cast=int)
     use_cache        = _cfg(cfg, "use_cache", True)
+
+    # Background-galaxy selection: caller-side now (xlensing applies no
+    # redshift filtering internally any more). Default ("margin", factor
+    # 1.1, offset 0.2) reproduces the old hardcoded xlensing metacal
+    # behaviour exactly; override to test other selection strategies.
+    bg_strategy = _cfg(cfg, "background_strategy", "margin")
+    bg_kwargs   = _cfg(cfg, "background_strategy_kwargs",
+                       {"factor": 1.1, "offset": 0.2})
 
     log_inner = _cfg(cfg, "log_inner_radius", -0.8, cast=float)
     log_outer = _cfg(cfg, "log_outer_radius", 0.6, cast=float)
@@ -447,6 +477,7 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     _TREE, _SR = tree, sr
     _RADIUS_MPC, _BIN_LIMITS = radius_mpc, bin_limits
     _N_COV_BOOT, _MIN_SOURCES = n_cov_bootstrap, min_sources
+    _BG_STRATEGY, _BG_KWARGS = bg_strategy, bg_kwargs
 
     work = [
         (int(i), int(catalog["ID"][i]), float(catalog["RA"][i]),

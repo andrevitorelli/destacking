@@ -45,6 +45,18 @@ chunk_read: 10000000   # metacal rows streamed per chunk during pre-filter
 # ═══ Measurement ═══════════════════════════════════════════════════════════
 radius_mpc: 5.0            # cone/aperture radius passed to metacal_cluster_lensing
 
+# Background-galaxy selection: xlensing applies no redshift cut internally
+# (that used to be hardcoded inside metacal_cluster_lensing; it was moved
+# here so different selection strategies can be tried and compared). See
+# destacking.data.BACKGROUND_SELECTION_STRATEGIES for the available names.
+# Default reproduces the old hardcoded xlensing behaviour exactly:
+#   z_source > background_strategy_kwargs.factor * z_cluster
+#              + background_strategy_kwargs.offset
+background_strategy: margin
+background_strategy_kwargs:
+  factor: 1.1
+  offset: 0.2
+
 # Radial grid [Mpc]: np.logspace(log_inner_radius, log_outer_radius, n_radii).
 # MUST match the fit_log_inner_radius/fit_log_outer_radius/fit_n_radii keys
 # of the gamma_inference.py config later used to fit this data (inference-
