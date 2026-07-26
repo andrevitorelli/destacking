@@ -344,6 +344,8 @@ _N_COV_BOOT   = None
 _MIN_SOURCES  = None
 _BG_STRATEGY  = None
 _BG_KWARGS    = None
+_SIGMA_E      = None
+_FLOOR_RMAX   = None
 
 
 def _measure_cluster(args):
@@ -395,8 +397,18 @@ def _measure_cluster(args):
         # bootstrap_signal, NOT single_cluster: no boost correction, so the
         # data vector and covariance are consistent with the boost-free NFW
         # model gamma_inference.py fits. See module docstring.
+        #
+        # sigma_e/floor_rmax: floors each bin's bootstrap variance at the
+        # shot-noise-only lower bound sigma_e**2/sum((1+M)W/Sigma_crit**2)
+        # for bins below floor_rmax. Galaxy-level bootstrap with only 2-3
+        # galaxies in an inner annulus can land on an implausibly tiny
+        # variance by chance (their weighted ratio barely moves across
+        # resamples), which single-handedly dominates the joint likelihood
+        # once r_min_fit no longer excludes that bin — see project memory
+        # wazp-desy3-root-cause-hypotheses.
         sigmas, sigmas_cov, _, _ = bootstrap_signal(
-            stake, _BIN_LIMITS, Nboot=_N_COV_BOOT
+            stake, _BIN_LIMITS, Nboot=_N_COV_BOOT,
+            sigma_e=_SIGMA_E, floor_rmax=_FLOOR_RMAX,
         )
         valid_bins = np.isfinite(sigmas)
         if not valid_bins.any():
@@ -416,7 +428,7 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     ``<sim_subdir>/.partial.npz`` every ``checkpoint_every`` clusters and
     reloaded on a matching re-run (gated by use_cache)."""
     global _TREE, _SR, _RADIUS_MPC, _BIN_LIMITS, _N_COV_BOOT, _MIN_SOURCES
-    global _BG_STRATEGY, _BG_KWARGS
+    global _BG_STRATEGY, _BG_KWARGS, _SIGMA_E, _FLOOR_RMAX
     import multiprocess as mp
     from sklearn.neighbors import BallTree
 
@@ -426,6 +438,12 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     n_workers        = _cfg(cfg, "n_workers", 8, cast=int)
     checkpoint_every  = _cfg(cfg, "checkpoint_every", 1000, cast=int)
     use_cache        = _cfg(cfg, "use_cache", True)
+
+    # Shot-noise variance floor for low-galaxy-count bins (see
+    # _measure_cluster's comment). None (default) reproduces the old
+    # behaviour exactly -- no floor.
+    sigma_e    = _cfg(cfg, "sigma_e", None, cast=float)
+    floor_rmax = _cfg(cfg, "floor_rmax", None, cast=float)
 
     # Background-galaxy selection: caller-side now (xlensing applies no
     # redshift filtering internally any more). Default ("margin", factor
@@ -478,6 +496,7 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     _RADIUS_MPC, _BIN_LIMITS = radius_mpc, bin_limits
     _N_COV_BOOT, _MIN_SOURCES = n_cov_bootstrap, min_sources
     _BG_STRATEGY, _BG_KWARGS = bg_strategy, bg_kwargs
+    _SIGMA_E, _FLOOR_RMAX = sigma_e, floor_rmax
 
     work = [
         (int(i), int(catalog["ID"][i]), float(catalog["RA"][i]),
@@ -528,6 +547,7 @@ def write_checkpoint(catalog, data_vectors, cov_matrices, radii, cfg,
                      sim_subdir):
     from astropy.table import Table
     from destacking.io import save_simulation_checkpoint
+    from destacking.data import assign_stack_bins
 
     n = len(catalog)
     z       = np.asarray(catalog["ZPHOT"], dtype=float)
@@ -543,8 +563,21 @@ def write_checkpoint(catalog, data_vectors, cov_matrices, radii, cfg,
               f"these, i.e. no gamma correction) but flagged for review",
               flush=True)
 
-    # cluster_obs: the REAL observables the fit reads (z, Lambda, delta_m).
-    cluster_obs = Table({"z": z, "Lambda": lam, "delta_m": delta_m})
+    # Stack membership (3 z x 4 NGALS x 2 delta_m, median-split per cell) —
+    # same binning wazp_stacked_analysis.py stacks clusters and fits a
+    # boost(R) model under (destacking.data.assign_stack_bins, shared so
+    # the two never disagree). Lets gamma_inference.py's `boosts:` config
+    # key look up and apply each cluster's stack's fitted boost correction.
+    _, _, _, _, stack_name = assign_stack_bins(z, lam, delta_m)
+    n_stacked = int((stack_name != "").sum())
+    print(f"  {n_stacked:,}/{n:,} clusters assigned a boost-fit stack "
+          f"({n - n_stacked:,} outside the z/richness/delta_m bin ranges)",
+          flush=True)
+
+    # cluster_obs: the REAL observables the fit reads (z, Lambda, delta_m),
+    # plus stack_name for the optional boost correction.
+    cluster_obs = Table({"z": z, "Lambda": lam, "delta_m": delta_m,
+                         "stack_name": stack_name})
 
     # truth_catalog: schema-compatible placeholder. M_halo/concentration are
     # genuinely unknown for real data and are never read by the inference
