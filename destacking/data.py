@@ -43,6 +43,76 @@ def select_background(strategy, z_source, z_cluster, **kwargs):
     return fn(z_source, z_cluster, **kwargs)
 
 
+# ── Stack (z x richness x delta_m) bin assignment ───────────────────────────
+# Shared by wazp_stacked_analysis.py (which fits a boost model per stack)
+# and prepare_real_data.py (which labels each cluster with its stack so
+# gamma_inference.py can look up and apply that stack's boost correction).
+# Both MUST use this one function — duplicating the binning logic risks a
+# cluster being labelled into a different stack than the one its boost
+# model was actually fit from.
+STACK_Z_EDGES  = np.array([0.10, 0.30, 0.50, 0.70])
+STACK_NG_EDGES = np.array([25., 35., 55., 85., np.inf])
+
+
+def _stack_bin_idx(values, edges):
+    v = np.asarray(values, dtype=float)
+    idx = np.digitize(v, edges[1:-1], right=False)
+    out = ~((v >= edges[0]) & (v <= edges[-1]))
+    idx[out] = -1
+    return idx
+
+
+def assign_stack_bins(z, ngals, delta_m,
+                      z_edges=STACK_Z_EDGES, ng_edges=STACK_NG_EDGES):
+    """3 z x N_NG richness x 2 delta_m (median-split per (z, NGALS) cell)
+    stack assignment. delta_m entries that are non-finite or <= 0 (cluster-
+    finder artefacts) never enter the per-cell median computation and never
+    get a stack — matches wazp_stacked_analysis.py's own DELTA_M_I>0
+    pre-filter even when the caller (e.g. prepare_real_data.py) passes an
+    unfiltered catalogue.
+
+    Returns
+    -------
+    z_bin, ng_bin, dm_bin : int arrays (N,)
+        -1 where a cluster falls outside every bin (or, for dm_bin, has no
+        valid delta_m or too few cell-mates to define a median).
+    dm_median_per_cell : dict[(i, j) -> float or None]
+    stack_name : str array (N,)
+        ``"z{i}_ng{j}_dm{k}"`` where all three bins are valid, else ``""``.
+    """
+    n_ng = len(ng_edges) - 1
+    z       = np.asarray(z, dtype=float)
+    ngals   = np.asarray(ngals, dtype=float)
+    delta_m = np.asarray(delta_m, dtype=float)
+    n = len(z)
+
+    z_bin  = _stack_bin_idx(z, z_edges)
+    ng_bin = _stack_bin_idx(ngals, ng_edges)
+    dm_valid = np.isfinite(delta_m) & (delta_m > 0)
+
+    dm_bin = np.full(n, -1, dtype=int)
+    dm_median_per_cell = {}
+    for i in range(len(z_edges) - 1):
+        for j in range(n_ng):
+            cell = (z_bin == i) & (ng_bin == j) & dm_valid
+            if cell.sum() < 2:
+                dm_median_per_cell[(i, j)] = None
+                continue
+            cell_dm = delta_m[cell]
+            med = float(np.median(cell_dm))
+            dm_median_per_cell[(i, j)] = med
+            glob_idx = np.where(cell)[0]
+            dm_bin[glob_idx[cell_dm < med]] = 0
+            dm_bin[glob_idx[cell_dm >= med]] = 1
+
+    valid = (z_bin >= 0) & (ng_bin >= 0) & (dm_bin >= 0)
+    stack_name = np.full(n, "", dtype=object)
+    for i in np.where(valid)[0]:
+        stack_name[i] = f"z{z_bin[i]}_ng{ng_bin[i]}_dm{dm_bin[i]}"
+
+    return z_bin, ng_bin, dm_bin, dm_median_per_cell, stack_name.astype(str)
+
+
 def magnitude_gaps(mag_bcg, mag_mem, p_mem, r_mem, r_cut=.5):
     """
     Calculates the expected magnitude gap between the central galaxy and the

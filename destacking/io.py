@@ -28,12 +28,21 @@ def save_simulation_checkpoint(sim_subdir, truth, ols, cluster_obs,
         concentration=np.asarray(truth["concentration"]),
         delta_m=np.asarray(truth["delta_m"]),
     )
-    np.savez_compressed(
-        os.path.join(sim_subdir, "cluster_obs.npz"),
-        z=np.asarray(cluster_obs["z"]),
-        Lambda=np.asarray(cluster_obs["Lambda"]),
-        delta_m=np.asarray(cluster_obs["delta_m"]),
-    )
+    co_arrays = {
+        "z":       np.asarray(cluster_obs["z"]),
+        "Lambda":  np.asarray(cluster_obs["Lambda"]),
+        "delta_m": np.asarray(cluster_obs["delta_m"]),
+    }
+    # Optional: stack membership for the boost correction (see
+    # gamma_inference.py's `boosts:` config key). Only present for
+    # real-data checkpoints from prepare_real_data.py — simulated
+    # checkpoints have no "stack" concept and omit it, and
+    # load_simulation_checkpoint's generic Table({k: co[k] for k in
+    # co.files}) means callers that don't ask for it never notice either
+    # way.
+    if "stack_name" in getattr(cluster_obs, "colnames", cluster_obs):
+        co_arrays["stack_name"] = np.asarray(cluster_obs["stack_name"])
+    np.savez_compressed(os.path.join(sim_subdir, "cluster_obs.npz"), **co_arrays)
     with open(os.path.join(sim_subdir, "ols.json"), "w") as f:
         json.dump(ols, f, indent=2)
 

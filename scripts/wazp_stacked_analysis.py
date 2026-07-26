@@ -19,19 +19,33 @@ Inputs (already built by prepare_real_data.py, reused as-is):
   data/metacal_filtered.npz   pre-filtered DES-Y3 metacal+DNF source
                                catalogue (ra, dec, z, e1, e2, w, R11..R22)
 
-Pipeline (5 stages, each checkpointed under data/wazp_stacked_*.pkl and
-gated by USE_CACHE so a re-run picks up where it left off):
+Pipeline (6 stages, each checkpointed under data/wazp_stacked_*.pkl /
+data/wazp_boost_fits.pkl and gated by USE_CACHE so a re-run picks up where
+it left off):
 
   1. bkgs       per-cluster RAW lensing background arrays (BallTree cone
                 query + xlensing.data.metacal_cluster_lensing) — kept raw
                 (not reduced to a single data vector) so the same
                 per-cluster measurement can be stacked under any binning.
   2. stacks     bin into 3 z x 4 NGALS x 2 delta_m (median-split per
-                (z, NGALS) cell) = up to 24 stacks; each stacked via
-                xlensing.data.stacked_signal, which boost-corrects the
-                signal AND its covariance internally (do NOT re-apply the
-                boost — see project memory
+                (z, NGALS) cell, via destacking.data.assign_stack_bins) =
+                up to 24 stacks; each stacked via xlensing.data.stacked_signal,
+                which boost-corrects the signal AND its covariance
+                internally (do NOT re-apply the boost — see project memory
                 "stacked_signal applies the boost internally").
+  2b. boost_fits fit cluster_toolkit.boostfactors.boost_powerlaw_at_R
+                (B(R) = 1 + B0*(R/Rs)^alpha, 3 params) to each stack's
+                boost(R) profile from stage 2, by GLS against the full
+                boosts_cov. Saved to data/wazp_boost_fits.pkl, keyed by
+                stack name ("z{i}_ng{j}_dm{k}") — prepare_real_data.py
+                labels each cluster with this same stack name (also via
+                assign_stack_bins) so gamma_inference.py can look up and
+                apply the matching stack's boost correction to that
+                cluster's individual ΔΣ profile (its `boosts:` config
+                key) — the joint fit has no boost correction of its own
+                (bootstrap_signal, not single_cluster), unlike stage 2
+                here. See project memory
+                wazp-desy3-alpha-cm-informative-prior.
   3. stack_fits NFW + miscentering nested-sampling fit per stack:
                 log_M, C, FMISS, SIGMA_OFF (BCG_B_MASS fixed at 0).
   4. ml_fits    mass-richness power law per delta_m group (low/high),
@@ -61,17 +75,29 @@ from nautilus import Prior, Sampler
 
 import xlensing.data
 import xlensing.model
-from destacking.data import select_background
+from destacking.data import select_background, assign_stack_bins
+from cluster_toolkit.boostfactors import boost_powerlaw_at_R
+from scipy.optimize import curve_fit
 
 # ── Config ────────────────────────────────────────────────────────────────
 WAZP_CATALOG = "data/wazp_real_data.fits"
 FILTERED_NPZ = "data/metacal_filtered.npz"
 
-BKG_CACHE  = "data/wazp_stacked_bkgs.pkl"
-STACKS_PKL = "data/wazp_stacked_stacks.pkl"
-FITS_PKL   = "data/wazp_stacked_fits.pkl"
-ML_PKL     = "data/wazp_stacked_ml_fits.pkl"
-CMR_PKL    = "data/wazp_stacked_cmr_fits.pkl"
+# Output file tag: distinguishes cache/output files between background-
+# selection strategies/parameters so different runs can be compared side
+# by side instead of clobbering each other. "" reproduces the original
+# (factor=1.1, the xlensing-default-matching baseline) filenames — back to
+# baseline: the boost fit needs to match gamma_scan_outputs/wazp_real_data
+# (factor=1.1), which is what the current joint fit (wazp_desy3_inference.yaml)
+# reads.
+RUN_TAG = ""
+
+BKG_CACHE  = f"data/wazp_stacked_bkgs{RUN_TAG}.pkl"
+STACKS_PKL = f"data/wazp_stacked_stacks{RUN_TAG}.pkl"
+FITS_PKL   = f"data/wazp_stacked_fits{RUN_TAG}.pkl"
+ML_PKL     = f"data/wazp_stacked_ml_fits{RUN_TAG}.pkl"
+CMR_PKL    = f"data/wazp_stacked_cmr_fits{RUN_TAG}.pkl"
+BOOST_PKL  = f"data/wazp_boost_fits{RUN_TAG}.pkl"
 
 USE_CACHE  = True     # set False to force a clean rebuild of every stage
 RADIUS_MPC = 5.0
@@ -82,8 +108,9 @@ NWORKERS   = 12
 # Background-galaxy selection: xlensing.data.metacal_cluster_lensing applies
 # no redshift filtering internally any more (moved here so different
 # selection strategies can be tried and compared — see
-# destacking.data.BACKGROUND_SELECTION_STRATEGIES). Default reproduces the
-# old hardcoded xlensing behaviour exactly: z_source > 1.1*z_cluster + 0.2.
+# destacking.data.BACKGROUND_SELECTION_STRATEGIES). factor=1.1 reproduces
+# the old hardcoded xlensing default exactly — back to baseline (see
+# RUN_TAG above); the factor=1.2 experiment is on hold.
 BACKGROUND_STRATEGY = "margin"
 BACKGROUND_STRATEGY_KWARGS = {"factor": 1.1, "offset": 0.2}
 TIMEOUT_S  = 300.0     # per-stack nautilus wall-clock cap
@@ -234,14 +261,6 @@ def build_bkgs(catalog, sr):
 
 # ── Stage 2: bin + stack ──────────────────────────────────────────────────
 
-def bin_idx(values, edges):
-    v = np.asarray(values, dtype=float)
-    idx = np.digitize(v, edges[1:-1], right=False)
-    out = ~((v >= edges[0]) & (v <= edges[-1]))
-    idx[out] = -1
-    return idx
-
-
 def build_stacks(catalog, bkg_by_id):
     if os.path.exists(STACKS_PKL) and USE_CACHE:
         with open(STACKS_PKL, "rb") as fh:
@@ -251,22 +270,13 @@ def build_stacks(catalog, bkg_by_id):
         return d["stacks"], d["z_bin"], d["ng_bin"], d["dm_bin"], \
                d["dm_median_per_cell"]
 
-    z_bin  = bin_idx(catalog["ZPHOT"], Z_EDGES)
-    ng_bin = bin_idx(catalog["NGALS"], NG_EDGES)
-    dm_bin = np.full(len(catalog), -1, dtype=int)
-    dm_median_per_cell = {}
-    for i in range(3):
-        for j in range(N_NG):
-            cell = (z_bin == i) & (ng_bin == j)
-            if cell.sum() < 2:
-                dm_median_per_cell[(i, j)] = None
-                continue
-            cell_dm = np.asarray(catalog["DELTA_M_I"])[cell]
-            med = float(np.median(cell_dm))
-            dm_median_per_cell[(i, j)] = med
-            glob_idx = np.where(cell)[0]
-            dm_bin[glob_idx[cell_dm < med]] = 0
-            dm_bin[glob_idx[cell_dm >= med]] = 1
+    # Shared with prepare_real_data.py (destacking.data.assign_stack_bins)
+    # so a cluster's stack label always matches the boost model it was
+    # fit from — see Stage 6 (fit_boost_models) below.
+    z_bin, ng_bin, dm_bin, dm_median_per_cell, _stack_name = assign_stack_bins(
+        catalog["ZPHOT"], catalog["NGALS"], catalog["DELTA_M_I"],
+        z_edges=Z_EDGES, ng_edges=NG_EDGES,
+    )
 
     stacks = {}
     boost_outer = []
@@ -332,6 +342,71 @@ def build_stacks(catalog, bkg_by_id):
     print(f"\n  stacks: produced {len(stacks)}/{n_expected}, saved to "
           f"{STACKS_PKL}", flush=True)
     return stacks, z_bin, ng_bin, dm_bin, dm_median_per_cell
+
+
+# ── Stage 2b: fit a boost(R) model per stack ─────────────────────────────
+#
+# B(R) = 1 + B0*(R/Rs)^alpha  (cluster_toolkit.boostfactors.boost_powerlaw_at_R)
+# fit by generalised least squares (full boosts_cov as the covariance,
+# matching how the boost was itself estimated — a joint cluster bootstrap
+# with the signal, see the module docstring) against each stack's boost
+# profile from Stage 2. Used by prepare_real_data.py + gamma_inference.py
+# to correct individual-cluster ΔΣ profiles by their stack's fitted boost
+# (see gamma_inference.py's `boosts:` config key) — motivated by
+# [[project_wazp_desy3_root_cause_hypotheses]]: the joint fit has no boost
+# correction at all (bootstrap_signal, not single_cluster), unlike this
+# stacked pipeline (stacked_signal).
+BOOST_P0     = (0.3, 1.0, -1.0)          # B0, Rs [Mpc], alpha — cluster_toolkit's own test values
+BOOST_BOUNDS = ((0.0, 0.01, -10.0), (20.0, 50.0, 10.0))
+
+
+def _boost_model(R, B0, Rs, alpha):
+    return boost_powerlaw_at_R(R, B0, Rs, alpha)
+
+
+def fit_boost_models(stacks):
+    if os.path.exists(BOOST_PKL) and USE_CACHE:
+        with open(BOOST_PKL, "rb") as fh:
+            d = pickle.load(fh)
+        print(f"  boost_fits: loaded {len(d['boost_fits'])} cached fits from "
+              f"{BOOST_PKL}", flush=True)
+        return d["boost_fits"]
+
+    boost_fits = {}
+    for name, s in stacks.items():
+        R   = radii
+        B   = np.asarray(s["boosts"], dtype=float)
+        cov = np.asarray(s["boosts_cov"], dtype=float)
+        try:
+            popt, pcov = curve_fit(
+                _boost_model, R, B, p0=BOOST_P0, bounds=BOOST_BOUNDS,
+                sigma=cov, absolute_sigma=True, maxfev=20000,
+            )
+            B0, Rs, alpha = (float(x) for x in popt)
+            perr = np.sqrt(np.diag(pcov))
+            resid = B - _boost_model(R, *popt)
+            cov_reg = cov + 1e-8 * np.eye(len(R)) * np.mean(np.diag(cov))
+            chi2 = float(resid @ np.linalg.solve(cov_reg, resid))
+            boost_fits[name] = {
+                "B0": B0, "Rs": Rs, "alpha": alpha,
+                "B0_err": float(perr[0]), "Rs_err": float(perr[1]),
+                "alpha_err": float(perr[2]), "cov": pcov,
+                "chi2": chi2, "dof": len(R) - 3, "failed": False,
+            }
+            print(f"  boost_fits: {name}  B0={B0:.3f}+/-{perr[0]:.3f}  "
+                  f"Rs={Rs:.3f}+/-{perr[1]:.3f}  alpha={alpha:+.3f}"
+                  f"+/-{perr[2]:.3f}  chi2/dof={chi2:.1f}/{len(R)-3}",
+                  flush=True)
+        except Exception as exc:
+            boost_fits[name] = {"failed": True, "error": repr(exc)}
+            print(f"  boost_fits: {name}  FAILED  {exc!r}", flush=True)
+
+    with open(BOOST_PKL, "wb") as fh:
+        pickle.dump({"radii": radii, "boost_fits": boost_fits}, fh)
+    n_ok = sum(1 for f in boost_fits.values() if not f.get("failed"))
+    print(f"\n  boost_fits: {n_ok}/{len(boost_fits)} ok, saved to {BOOST_PKL}",
+          flush=True)
+    return boost_fits
 
 
 # ── Stage 3: per-stack NFW + miscentering fit ────────────────────────────
@@ -757,6 +832,9 @@ def main():
     stacks, z_bin, ng_bin, dm_bin, dm_median_per_cell = build_stacks(
         catalog, bkg_by_id,
     )
+
+    print("\nStage 2b: fit boost(R) model per stack", flush=True)
+    fit_boost_models(stacks)
 
     print("\nStage 3: NFW + miscentering fit per stack", flush=True)
     fits_out = build_stack_fits(stacks)
