@@ -1,0 +1,87 @@
+# Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
+# prepare_real_data.py (wazp_desy3_real_data_floor.yaml) into
+# gamma_scan_outputs/wazp_real_data_floor/simulation_g00_gamma+0.0/.
+#
+# Variant of wazp_desy3_inference_boost.yaml testing r_min_fit=0 on the
+# FIXED checkpoint: the previous r_min_fit=0 attempt (wild_outlier_mask,
+# value-range based) was a stopgap for a symptom -- the real bug was in
+# xlensing.data.bootstrap_signal's per-bin covariance, which could land 6-7
+# orders of magnitude below the shot-noise floor for bins with only 2-3
+# galaxies (their weighted-ratio bootstrap estimator barely moves across
+# resamples even though true uncertainty is huge). That's now fixed at the
+# source (sigma_e/floor_rmax params, wazp_desy3_real_data_floor.yaml) and
+# the checkpoint was fully remeasured -- confirmed 0/15,967 clusters have
+# any implausible sqrt(var)<5 entries any more (was 8, one of which alone
+# contributed 98% of the entire sample's chi^2 with r_min_fit=0).
+# wild_outlier_mask is OFF here: it was a mean-value-based patch for the
+# same underlying symptom the covariance floor now fixes properly, and
+# might needlessly discard genuinely large-but-real ΔΣ values now that the
+# per-cluster uncertainty on them is trustworthy.
+#
+# See project memory wazp-desy3-root-cause-hypotheses (hypothesis #2).
+#
+# gamma_true=0.0 here is NOT a truth value — real clusters have no known
+# gamma. It is a pure directory-naming/metadata label (see
+# prepare_real_data.py's module docstring): read off gamma_est/sigma_gamma
+# and ignore every "bias"/"gamma_true_ols" column in the reports, since
+# there is no truth to compare against.
+#
+# Usage: python gamma_inference.py wazp_desy3_inference_boost_floor.yaml
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: false
+inference:  true
+data_folder: gamma_scan_outputs/wazp_real_data_floor
+
+# Per-cluster boost correction — see wazp_stacked_analysis.py's Stage 2b
+# and gamma_inference.py's `boosts:` handling (_apply_boost_correction).
+# Unaffected by the floor fix (fit on independently-measured STACKED
+# profiles, not the per-cluster checkpoint), so the existing fits are
+# still valid — no need to rerun Stage 2b.
+boosts: data/wazp_boost_fits.pkl
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0
+n_gamma:     1
+n_workers:   12
+
+n_clusters: 15967   # cosmetic only (report/plot titles) — the actual
+                    # bootstrap draw size follows the loaded data (n_data)
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 50
+timeout:     7200          # ~10.6x more clusters than the sim tests ->
+                           # each likelihood call costs proportionally more
+
+# Inference-only mode requires the fit radial grid explicitly — MUST match
+# the grid prepare_real_data.py measured on (log_inner_radius/log_outer_radius/
+# n_radii in wazp_desy3_real_data_floor.yaml).
+fit_log_inner_radius: -0.8
+fit_log_outer_radius:  0.6
+fit_n_radii:           8
+r_min_fit:             0.0   # every bin now reaches the fit -- see header
+
+fit_params:
+  # Mass-concentration / mass-richness relations: same widened gaussian
+  # priors as hisnr_tri_mis_wide.yaml (no known truth for real data
+  # either, so keep them broad rather than tightening around an assumed
+  # value) — EXCEPT alpha_cm, see below.
+  c0:           {fit: true, prior: gaussian, loc: 4.5,   scale: 3.0}
+  # alpha_cm: centred on the Dutton & Maccio (2014) c-M slope (computed
+  # numerically via colossus at M200m, z=0.35, the pivot used elsewhere in
+  # this pipeline: log10(c) vs log10(M) is essentially flat at -0.088
+  # across the cluster mass range). scale=0.3 is only slightly informative
+  # (about 3x the data's own resolving power seen in the earlier wide-prior
+  # fit, posterior sigma ~0.11) — nudges toward the physical sign without
+  # dominating the likelihood.
+  alpha_cm:     {fit: true, prior: gaussian, loc: -0.088, scale: 0.3}
+  beta_cm:      {fit: true, prior: gaussian, loc: -0.4,  scale: 1.5}
+  gamma_cm:     {fit: true, prior: gaussian, loc: 0.0,   scale: 10.5}
+  log_M_norm:   {fit: true, prior: gaussian, loc: 0.0,   scale: 0.3}
+  alpha_mr:     {fit: true, prior: gaussian, loc: 1.356, scale: 0.5}
+  beta_mr:      {fit: true, prior: gaussian, loc: -0.30, scale: 0.3}
+  # Miscentering: flat/uninformative over the full physical range, as
+  # requested — no simulated truth to centre a gaussian on for real data.
+  f_mis:        {fit: true, prior: flat, lo: 0.0, hi: 1.0}
+  sigma_off:    {fit: true, prior: flat, lo: 0.0, hi: 1.0}
