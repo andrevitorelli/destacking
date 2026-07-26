@@ -10,6 +10,96 @@ _MC_DM_REF      = 1.0    # reference magnitude gap [mag]
 
 
 # ---------------------------------------------------------------------------
+# Diemer & Joyce (2019) concentration-mass relation, in the M200m/C200m
+# definition this package uses throughout (xlensing.model.NFW_Delta_Sigma's
+# M200m/C200m are both spherical-overdensity-wrt-mean-matter-density
+# quantities -- see r_vir_m, which integrates cosmo.rhoM, not cosmo.rhocz).
+#
+# colossus's 'diemer19' model is natively defined ONLY for the 200c mass
+# definition (colossus.halo.concentration.models['diemer19'].mdefs ==
+# ['200c']); requesting mdef='200m' still works (colossus converts M200m to
+# M200c internally, evaluates the native model, converts the resulting
+# concentration back), and this is the physically correct call to make --
+# our M really is an M200m value, and treating it as if it were M200c
+# outright would systematically bias the predicted concentration (M200m
+# exceeds M200c for the same halo, typically by 15-30%). But that
+# conversion path breaks for vector-valued z (a colossus bug: internally it
+# hits an "ambiguous truth value of an array" error and silently returns
+# -1 for every element) even though it works fine for a scalar z with a
+# vector M. Since this module needs concentrations for many clusters at
+# many different redshifts on every likelihood call, we precompute
+# log10(c200m) on a (z, log10 M) grid via colossus at fixed scalar z (safe,
+# vectorized over M) ONCE, lazily, and interpolate at runtime -- fast and
+# free of the array-z bug.
+_DIEMER19_LOGM_RANGE = (12.5, 16.0)   # log10(M200m/Msun), comfortably wider
+_DIEMER19_Z_RANGE    = (0.02, 0.85)   # than any WaZP-like sample's range
+_DIEMER19_N_LOGM      = 71
+_DIEMER19_N_Z          = 42
+_diemer19_interp = None   # lazily-built scipy.interpolate.RegularGridInterpolator
+
+
+def _build_diemer19_interp():
+    import warnings
+    from colossus.cosmology import cosmology as _colossus_cosmology
+    from colossus.halo import concentration as _colossus_concentration
+    from scipy.interpolate import RegularGridInterpolator
+
+    # Match xlensing.cosmo's Planck18 cosmology (see xlensing/cosmo.py).
+    # colossus.cosmology.getCurrent() RAISES (not returns None) when no
+    # cosmology has been set yet in this process/worker -- there is no
+    # query-only way to check, so probe with try/except instead.
+    try:
+        _colossus_cosmology.getCurrent()
+    except Exception:
+        _colossus_cosmology.setCosmology('planck18')
+
+    logM_grid = np.linspace(*_DIEMER19_LOGM_RANGE, _DIEMER19_N_LOGM)
+    z_grid    = np.linspace(*_DIEMER19_Z_RANGE, _DIEMER19_N_Z)
+    M_grid    = 10.0 ** logM_grid
+
+    log10c_table = np.empty((len(z_grid), len(logM_grid)))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for i, z in enumerate(z_grid):
+            c = _colossus_concentration.concentration(
+                M_grid, '200m', z=float(z), model='diemer19')
+            # colossus returns -1 (not NaN) for points outside the model's
+            # calibrated range; propagate as NaN so a fit that wanders there
+            # gets -inf from the likelihood, not a silently wrong c=-1.
+            c = np.where(np.isfinite(c) & (c > 0), c, np.nan)
+            log10c_table[i] = np.log10(c)
+
+    return RegularGridInterpolator(
+        (z_grid, logM_grid), log10c_table,
+        bounds_error=False, fill_value=None,   # extrapolate at the edges
+    )
+
+
+def diemer19_c200m(M200m, z):
+    """log10(c200m) from the Diemer & Joyce (2019) relation, interpolated
+    from a precomputed (z, log10 M200m) grid -- see the module-level note
+    above for why this isn't just a direct colossus call. Vectorized over
+    both M200m and z (they may be different lengths-worth of scalars, but
+    must broadcast together -- typically both (N,) per-cluster arrays).
+
+    Returns
+    -------
+    ndarray
+        c200m (linear, not log) at each (M200m, z), NaN outside the grid's
+        calibrated mass/redshift range.
+    """
+    global _diemer19_interp
+    if _diemer19_interp is None:
+        _diemer19_interp = _build_diemer19_interp()
+    M200m = np.asarray(M200m, dtype=float)
+    z     = np.asarray(z, dtype=float)
+    logM  = np.log10(M200m)
+    pts   = np.column_stack([np.broadcast_to(z, logM.shape),
+                             np.broadcast_to(logM, logM.shape)])
+    return 10.0 ** _diemer19_interp(pts)
+
+
+# ---------------------------------------------------------------------------
 # Internal: NFW profile computation
 # ---------------------------------------------------------------------------
 
@@ -300,6 +390,84 @@ def forward_model_combined(
             + beta_cm  * np.log10((1.0 + z) / (1.0 + z_ref))
             + gamma_cm * log_dm_r)
     C200m = 10.0 ** logC
+
+    return A * _nfw_profiles(
+        z, M200m, C200m, radii,
+        FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Forward model — Diemer & Joyce (2019) M-c relation, single normalisation
+# ---------------------------------------------------------------------------
+
+def forward_model_diemer(
+    gamma,
+    cluster_table,
+    radii,
+    log_M_norm=0.0,
+    alpha_mr=1.356,
+    beta_mr=-0.30,
+    A=1.0,
+    FMISS=None,
+    SIGMA_OFF=None,
+    BCG_B_MASS=None,
+):
+    """
+    Predict NFW ΔΣ profiles using the Diemer & Joyce (2019) mass-
+    concentration relation as-is (mass and redshift dependence both taken
+    directly from the theoretical model, not fit), with a single free
+    log-offset ``gamma`` as the only concentration-related parameter:
+
+        log10(M) = log10(M0) + alpha_mr * (log10(Lambda) − log10(Lambda0))
+                              + beta_mr  * (log10(z) − log10(z0))
+                              + log_M_norm
+
+        log10(c) = log10(c_Diemer19(M200m, z)) + gamma
+
+    Unlike ``forward_model_combined``, there is no separate mass slope,
+    redshift slope, or magnitude-gap term for concentration -- Diemer19
+    already encodes the mass and redshift dependence (including its
+    non-power-law curvature, see project report
+    reports/2026-07-26_boost_factors_variance_floor_alpha_cm.tex), so this
+    model tests whether the data are consistent with that predicted shape
+    up to one overall calibration factor, rather than fitting the shape
+    itself. ``gamma=0`` reproduces the literature prediction exactly;
+    ``gamma`` is d(log10 c) / d(1), i.e. a flat multiplicative shift
+    (10**gamma) applied to c_Diemer19 at every mass and redshift.
+
+    Parameters
+    ----------
+    gamma : float
+        Log10 offset applied to the Diemer & Joyce (2019) c200m
+        prediction: c = c_Diemer19(M200m, z) * 10**gamma.
+    cluster_table : astropy.table.Table
+        Must have columns 'z' and 'Lambda'. 'delta_m' is not used --
+        there is no magnitude-gap term in this model.
+    radii : array (M,)
+        Projected radii in Mpc.
+    log_M_norm, alpha_mr, beta_mr : float
+        Mass-richness relation parameters, same meaning as in
+        ``forward_model_combined``.
+    A : float
+        Global multiplicative amplitude correction. Default 1.0.
+    FMISS, SIGMA_OFF, BCG_B_MASS : array_like (N,) or None
+        Optional per-cluster miscentering and BCG arrays passed through to
+        ``_nfw_profiles``. Default ``None`` → centered, no BCG.
+
+    Returns
+    -------
+    ndarray (N, M)
+        Predicted ΔΣ profiles in M_sun/pc².
+    """
+    z      = np.asarray(cluster_table['z'])
+    Lambda = np.asarray(cluster_table['Lambda'])
+
+    logM  = mass_lambda_McClintock18(Lambda, z, Flambda=alpha_mr,
+                                     Gz=beta_mr) + log_M_norm
+    M200m = 10.0 ** logM
+
+    C200m = diemer19_c200m(M200m, z) * (10.0 ** gamma)
 
     return A * _nfw_profiles(
         z, M200m, C200m, radii,
