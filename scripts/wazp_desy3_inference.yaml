@@ -48,9 +48,20 @@ r_min_fit:             0.5
 fit_params:
   # Mass-concentration / mass-richness relations: same widened gaussian
   # priors as hisnr_tri_mis_wide.yaml (no known truth for real data either,
-  # so keep them broad rather than tightening around an assumed value).
+  # so keep them broad rather than tightening around an assumed value) —
+  # EXCEPT alpha_cm, see below.
   c0:           {fit: true, prior: gaussian, loc: 4.5,   scale: 3.0}
-  alpha_cm:     {fit: true, prior: gaussian, loc: -0.1,  scale: 0.9}
+  # alpha_cm: informative prior (truncated to negative values), not the
+  # wide unconstrained gaussian used before. The unconstrained fit keeps
+  # recovering alpha_cm compatible with zero or positive across multiple
+  # pipelines/background-selection settings, when established c-M
+  # relations (Dutton & Maccio 2014, Diemer & Joyce 2019) predict clearly
+  # negative — see project memory wazp-desy3-alpha-cm-anomaly and
+  # wazp-desy3-root-cause-hypotheses. Pending a proper fix (fitting the
+  # boost factor from the stacked clusters and correcting individual-
+  # cluster profiles with it), impose the literature expectation directly:
+  # N(-0.1, 0.1) truncated to alpha_cm <= 0.
+  alpha_cm:     {fit: true, prior: gaussian, loc: -0.1,  scale: 0.1, hi: 0.0}
   beta_cm:      {fit: true, prior: gaussian, loc: -0.4,  scale: 1.5}
   gamma_cm:     {fit: true, prior: gaussian, loc: 0.0,   scale: 10.5}
   log_M_norm:   {fit: true, prior: gaussian, loc: 0.0,   scale: 0.3}
