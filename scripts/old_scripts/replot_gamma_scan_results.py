@@ -1,18 +1,34 @@
 """
-Re-render gamma_scan_results.png from an existing run's scan_summary.json with
-two added overlays:
+REVIEWER VALIDATION SCRIPT — gamma-recovery calibration check.
+
+Re-render gamma_scan_results.png from an existing gamma_inference.py
+SIMULATION run's scan_summary.json (a multi-gamma_true scan with known
+injected truth, e.g. simulation: true in the YAML config — NOT one of the
+single-point real-data inference runs, which have no truth to compare
+against). Adds two overlays on top of the basic gamma_hat-vs-gamma_true
+plot gamma_inference.py already produces:
 
   (1) Weighted linear fit  γ̂ = a · γ_true + b  with ±1σ error region.
       The slope a quantifies the overall calibration: a < 1 means the
       estimator is compressed toward zero; b ≠ 0 is an additive offset.
+      For the pipeline to be trustworthy, a should be consistent with 1
+      and b with 0 within their errors.
 
   (2) A running median in bins of 10 consecutive points with the 68 % CL
-      band shown around it.
+      band shown around it — a non-parametric cross-check of (1) that
+      doesn't assume linearity.
 
 Usage:
-    python scripts/replot_gamma_scan_results.py [RUN_DIR]
+    python replot_gamma_scan_results.py RUN_DIR
+    python replot_gamma_scan_results.py   # uses the latest run in
+                                           # ~/destacking_data/output/
 
-RUN_DIR defaults to the most recently modified gamma_scan_outputs/run_*.
+Verified 2026-07-27 against a fresh 3-gamma-point smoke-test scan
+(gamma_range [-0.3, 0.3], 150 clusters, 3 bootstraps/point) — produces
+gamma_scan_results.png with a sane slope/intercept fit. Also runs
+cleanly against the archived 11-point scan at
+~/destacking_data/sims/old_outputs/good_sim_test (gamma_range
+[-0.5, 1.0], 1000 clusters, 10 bootstraps/point).
 """
 
 from __future__ import annotations
@@ -27,7 +43,7 @@ import numpy as np
 
 
 def find_latest_run():
-    base = "gamma_scan_outputs"
+    base = os.path.expanduser("~/destacking_data/output")
     runs = sorted((d for d in os.listdir(base) if d.startswith("run_")),
                   key=lambda d: os.path.getmtime(os.path.join(base, d)),
                   reverse=True)
@@ -48,7 +64,7 @@ def main():
 
     gt = np.array([r["gamma_true"]          for r in scan])
     gh = np.array([r["gamma_ensemble_med"]  for r in scan])
-    sb = np.array([r["sigma_boot"]          for r in scan])
+    sb = np.array([r["sigma_gamma"]         for r in scan])
     g_ols = np.array([r.get("gamma_true_ols", r["gamma_true"]) for r in scan])
 
     n_clusters  = scan[0].get("n_clusters",  "?")

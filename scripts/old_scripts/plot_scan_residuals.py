@@ -1,14 +1,31 @@
 """
-Generate per-simulation residual + posterior-overlay plots for a gamma_scan run.
+REVIEWER VALIDATION SCRIPT — per-bootstrap posterior calibration check.
 
-For each simulation_g{k}_gamma{v} directory, produces:
-  gamma_residuals.png      — per-bootstrap (gamma_med - gamma_true) with 68% CI error bars
-  posteriors_overlay.png   — overlay of all bootstrap posterior KDEs
+Generate per-simulation residual + posterior-overlay plots for a
+gamma_inference.py SIMULATION run (simulation: true, known injected
+truth). For each simulation_g{k}_gamma{v} directory, produces:
+
+  gamma_residuals.png    — per-bootstrap (gamma_med - gamma_true) with
+                            68% CI error bars, plus the ratio
+                            sigma_boot / <sigma_gamma^post> printed on the
+                            figure: this should be close to 1 if the
+                            per-fit posterior width correctly predicts the
+                            scatter seen across independent bootstrap
+                            draws (neither over- nor under-confident).
+  posteriors_overlay.png — all bootstrap posterior KDEs for that gamma
+                            point overlaid with the prior and the truth,
+                            so a reviewer can see draw-to-draw posterior
+                            stability by eye.
 
 Usage:
-  python scripts/plot_scan_residuals.py [RUN_DIR]
+  python plot_scan_residuals.py RUN_DIR
+  python plot_scan_residuals.py   # uses the latest run in
+                                   # ~/destacking_data/output/
 
-RUN_DIR defaults to the most-recently-modified gamma_scan_outputs/run_* directory.
+Verified 2026-07-27 against a fresh 3-gamma-point smoke-test scan and
+against the archived 11-point scan at
+~/destacking_data/sims/old_outputs/good_sim_test — figures render
+correctly with no code changes needed beyond the RUN_DIR default below.
 """
 
 import json
@@ -27,7 +44,7 @@ PRIORS_GAMMA = sp_norm(loc=0.0, scale=3.5)
 
 
 def find_latest_run():
-    base = "gamma_scan_outputs"
+    base = os.path.expanduser("~/destacking_data/output")
     runs = sorted(
         (d for d in os.listdir(base) if d.startswith("run_")),
         key=lambda d: os.path.getmtime(os.path.join(base, d)),

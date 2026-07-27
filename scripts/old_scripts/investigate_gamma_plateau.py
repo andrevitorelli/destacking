@@ -1,5 +1,10 @@
 """
-Investigate the γ̂ ≈ -0.5 plateau seen in the gamma scan.
+REVIEWER VALIDATION SCRIPT — likelihood-shape / degeneracy diagnostic.
+
+Investigate the γ̂ ≈ -0.5 plateau seen in the gamma scan. Requires a
+gamma_inference.py SIMULATION run (simulation: true) whose
+simulation_g*/ checkpoints haven't been cleaned up; only runs on
+gamma_true < 0.0 points.
 
 For each saved negative-γ_true simulation in a gamma_scan run, this script:
 
@@ -20,10 +25,23 @@ Outputs three figures into RUN_DIR:
   plateau_mean_profile.png  — mean ΔΣ at γ ∈ {γ_true, −0.5, 0} vs data mean
 
 Usage:
-  python scripts/investigate_gamma_plateau.py [RUN_DIR]
+  python investigate_gamma_plateau.py RUN_DIR
+  python investigate_gamma_plateau.py   # uses the latest run in
+                                         # ~/destacking_data/output/
 
 This is a read-only diagnostic — it never writes into the existing run
 directory's simulation subfolders, only into a new ``plateau/`` subdir.
+
+Fixed 2026-07-27: log_likelihood_combined/forward_model_combined's
+alpha/beta/gamma kwargs were renamed alpha_cm/beta_cm/gamma_cm since this
+script was last touched; the fixed radial grid also didn't match every
+run's actual sim grid — now reconstructed per-run via load_radii() from
+RUN_DIR's saved YAML config. Verified against a fresh 3-gamma-point
+smoke-test scan (150 clusters, one gamma_true=-0.3 point) — all three
+figures render; the log-L(γ) profile is nearly flat near the peak, as
+expected for a sample this small (little gamma information per cluster),
+so don't expect a sharp plateau-edge signature at N=150 the way a full
+production run (O(1000+) clusters) would show.
 """
 
 from __future__ import annotations
@@ -44,7 +62,6 @@ from destacking.model import forward_model_combined, _MC_M_PIVOT_LOG, _MC_Z_REF
 
 # ── Constants matching gamma_scan.py ────────────────────────────────────────
 DELTA_M_REF = 0.1
-RADII       = np.logspace(-0.8, 0.8, 12)
 R_MIN_FIT   = 0.5
 
 from astropy.cosmology import Planck18 as _planck18
@@ -55,7 +72,7 @@ SIGMA_OFF_MPC   = SIGMA_OFF_MPC_H / H_PLANCK
 
 
 def find_latest_run():
-    base = "gamma_scan_outputs"
+    base = os.path.expanduser("~/destacking_data/output")
     runs = sorted(
         (d for d in os.listdir(base) if d.startswith("run_")),
         key=lambda d: os.path.getmtime(os.path.join(base, d)),
@@ -64,6 +81,24 @@ def find_latest_run():
     if not runs:
         raise FileNotFoundError(f"No run directories in {base}/")
     return os.path.join(base, runs[0])
+
+
+def load_radii(run_dir):
+    """Reconstruct the simulated radial grid from the run's saved YAML
+    config (gamma_inference.py copies its config into RUN_DIR/*.yaml).
+    Falls back to the historical default grid if no config is found, for
+    old runs predating that checkpoint."""
+    import glob
+    import yaml
+    for cfg_path in glob.glob(os.path.join(run_dir, "*.yaml")):
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        if "sim_log_inner_radius" in cfg:
+            return np.logspace(
+                cfg["sim_log_inner_radius"], cfg["sim_log_outer_radius"],
+                int(cfg["sim_n_radii"]),
+            )
+    return np.logspace(-0.8, 0.8, 12)
 
 
 def parse_gamma(sim_dir):
@@ -91,10 +126,10 @@ def loglike_scan(obs, dv_fit, cv_fit, R_fit, ols, gamma_grid, fmiss, sig_off):
     out = np.empty_like(gamma_grid)
     for k, g in enumerate(gamma_grid):
         out[k] = log_likelihood_combined(
-            c0=ols["c0_true"], alpha=ols["alpha_true"], gamma=float(g),
+            c0=ols["c0_true"], alpha_cm=ols["alpha_true"], gamma_cm=float(g),
             cluster_table=obs, data_vectors=dv_fit, cov_matrices=cv_fit,
             radii=R_fit,
-            beta=ols["beta_true"],
+            beta_cm=ols["beta_true"],
             M_pivot_log=_MC_M_PIVOT_LOG, z_ref=_MC_Z_REF,
             delta_m_ref=DELTA_M_REF,
             log_M_norm=0.0,
@@ -123,9 +158,9 @@ def model_c_array(obs, ols, gamma):
 def mean_model_profile(obs, R_fit, ols, gamma, fmiss, sig_off):
     """Mean of forward-model ΔΣ over all clusters."""
     model = forward_model_combined(
-        c0=ols["c0_true"], alpha=ols["alpha_true"], gamma=gamma,
+        c0=ols["c0_true"], alpha_cm=ols["alpha_true"], gamma_cm=gamma,
         cluster_table=obs, radii=R_fit,
-        beta=ols["beta_true"],
+        beta_cm=ols["beta_true"],
         M_pivot_log=_MC_M_PIVOT_LOG, z_ref=_MC_Z_REF,
         delta_m_ref=DELTA_M_REF, log_M_norm=0.0,
         FMISS=fmiss, SIGMA_OFF=sig_off, BCG_B_MASS=None,
@@ -169,6 +204,7 @@ def main():
     cdist_records = []
     mean_records  = []
 
+    RADII = load_radii(run_dir)
     keep = RADII >= R_MIN_FIT
     R_fit = RADII[keep]
 
@@ -194,17 +230,17 @@ def main():
 
         # also evaluate at exact γ_true and -0.5 for a clean readout
         ll_true = log_likelihood_combined(
-            c0=ols["c0_true"], alpha=ols["alpha_true"], gamma=float(gamma_true),
+            c0=ols["c0_true"], alpha_cm=ols["alpha_true"], gamma_cm=float(gamma_true),
             cluster_table=obs, data_vectors=dv_fit, cov_matrices=cv_fit,
-            radii=R_fit, beta=ols["beta_true"],
+            radii=R_fit, beta_cm=ols["beta_true"],
             M_pivot_log=_MC_M_PIVOT_LOG, z_ref=_MC_Z_REF,
             delta_m_ref=DELTA_M_REF, log_M_norm=0.0,
             FMISS=fmiss, SIGMA_OFF=sigoff, BCG_B_MASS=None,
         )
         ll_m05 = log_likelihood_combined(
-            c0=ols["c0_true"], alpha=ols["alpha_true"], gamma=-0.5,
+            c0=ols["c0_true"], alpha_cm=ols["alpha_true"], gamma_cm=-0.5,
             cluster_table=obs, data_vectors=dv_fit, cov_matrices=cv_fit,
-            radii=R_fit, beta=ols["beta_true"],
+            radii=R_fit, beta_cm=ols["beta_true"],
             M_pivot_log=_MC_M_PIVOT_LOG, z_ref=_MC_Z_REF,
             delta_m_ref=DELTA_M_REF, log_M_norm=0.0,
             FMISS=fmiss, SIGMA_OFF=sigoff, BCG_B_MASS=None,

@@ -1,17 +1,33 @@
 """
-Alternative residual + combined-posterior plots for a gamma_scan run.
+REVIEWER VALIDATION SCRIPT — per-gamma posterior recovery check.
+
+Alternative residual + combined-posterior plots for a gamma_inference.py
+SIMULATION run (simulation: true, a multi-gamma_true scan with known
+injected truth — not a single-point real-data inference run).
 
 Produces two figures saved to RUN_DIR:
   scan_transfer_function.png  — gamma_hat vs gamma_true (top) and bias (bottom)
   scan_combined_posteriors.png — one panel per gamma: all bootstrap posteriors
-                                 pooled into a single combined posterior KDE
+                                 pooled into a single combined posterior KDE,
+                                 with the prior and the injected truth
+                                 overlaid, so a reviewer can see by eye
+                                 whether the posterior is prior-dominated,
+                                 whether it covers the truth, and how it
+                                 compares across the gamma grid.
 
 For each gamma_true the bootstrap posteriors are combined by giving every draw
 equal weight (1/N_boot), then re-normalising.  The result is the mixture
 posterior that averages over bootstrap resamplings of the cluster sample.
 
 Usage:
-  python scripts/plot_combined_posteriors.py [RUN_DIR]
+  python plot_combined_posteriors.py RUN_DIR
+  python plot_combined_posteriors.py   # uses the latest run in
+                                        # ~/destacking_data/output/
+
+Verified 2026-07-27 against a fresh 3-gamma-point smoke-test scan and
+against the archived 11-point scan at
+~/destacking_data/sims/old_outputs/good_sim_test — both figures render
+correctly with no code changes needed beyond the RUN_DIR default below.
 """
 
 import json
@@ -32,7 +48,7 @@ PRIOR_GAMMA = sp_norm(loc=0.0, scale=3.5)
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def find_latest_run():
-    base = "gamma_scan_outputs"
+    base = os.path.expanduser("~/destacking_data/output")
     runs = sorted(
         (d for d in os.listdir(base) if d.startswith("run_")),
         key=lambda d: os.path.getmtime(os.path.join(base, d)),

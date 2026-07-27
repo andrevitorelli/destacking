@@ -1,12 +1,25 @@
 """
-Compare the 51-point amplitude_correction scan to the 201-point reference
-(no-A) scan, and show where A and log_M_norm landed.
+NOT REUSABLE — kept for reference only, do not run as a validation check.
 
-Outputs (under gamma_scan_outputs/run_2026-05-27T09-41-05/):
-  comparison_transfer_function.png  — γ̂ vs γ_true, both runs overlaid +
-                                      linear fits.
-  A_lmn_posteriors.png              — A and log_M_norm posteriors vs γ_true
-                                      for the new run.
+Compares a specific 51-point "with global amplitude correction A" scan to
+a specific 201-point reference (no-A) scan, and shows where A and
+log_M_norm landed. Both hardcoded run directories
+(gamma_scan_outputs/run_2026-05-26T18-27-50,
+gamma_scan_outputs/run_2026-05-27T09-41-05) were deleted long before this
+directory was even created, and it depends on A_lmn_posteriors.json /
+lmn_posteriors.json — bespoke side-output files written by a one-off
+experimental variant of gamma_inference.py that no longer exists; the
+current gamma_inference.py never produces them.
+
+More importantly, the question this script answers is already closed:
+per project memory ("Do not use the amplitude correction A"), two 51-pt
+gamma-scans (one of which was this very comparison) showed A's effect on
+the recovered gamma slope is negligible, so A is now pinned at 1.0
+everywhere and is not a free/scanned parameter in the current pipeline.
+Reproducing this comparison would mean re-running two multi-hour
+multi-point scans with a deprecated experimental config just to re-derive
+an already-settled conclusion — not a useful reviewer-facing check.
+Left unfixed and excluded from the "verified working" set below.
 """
 
 from __future__ import annotations
