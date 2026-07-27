@@ -1,0 +1,63 @@
+# Production run of gamma_inference_diemer.py: WaZP clusters + DES-Y3
+# metacal, using the Diemer & Joyce (2019) mass-concentration relation as
+# the baseline, with a single free magnitude-gap slope 'gamma' (see
+# destacking/model.py's forward_model_diemer and
+# reports/2026-07-26_boost_factors_variance_floor_alpha_cm.tex):
+#   log10(c) = log10(c_Diemer19(M200m, z)) + gamma * log10(Δm/Δm_ref)
+# gamma plays the same role gamma_cm does in gamma_inference.py's combined
+# model, just layered on the Diemer19 baseline instead of a free power law.
+#
+# No priors/inference on alpha_cm, beta_cm, or c0 at all -- those
+# parameters don't exist in this model. The only concentration-related
+# free parameter is gamma; everything else fit is mass-richness
+# (alpha_mr, beta_mr, log_M_norm) and population-level miscentering
+# (f_mis, sigma_off).
+#
+# Same checkpoint as wazp_desy3_inference_boost_floor6.yaml (6 radial
+# bins, log_inner_radius=-0.6, sigma_e shot-noise variance floor already
+# baked into the covariance at measurement time -- see project memory
+# bootstrap-covariance-floor-bug). No boost correction here: this script
+# (gamma_inference_diemer.py) is based on the pre-boost-correction
+# gamma_inference.py (branched from `claude`, not `develop`), so it has
+# no `boosts:` config key at all -- the joint fit has no boost correction
+# regardless of relation, same as it always has for this un-stacked fit.
+#
+# gamma_true=0.0 is NOT a truth value — a pure directory-naming label
+# (real clusters have no known truth). Read gamma_est/sigma_gamma off the
+# ensemble_summary/scan_summary and ignore any "bias" column.
+#
+# Usage: python gamma_inference_diemer.py gamma_inference_diemer_production.yaml
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: false
+inference:  true
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data_floor6
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [0.0, 0.0]
+n_gamma:     1
+n_workers:   12
+n_clusters:  15967   # cosmetic only (report/plot titles)
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 50
+timeout:     7200     # matches the other real-data (15,925-cluster) runs
+
+fit_log_inner_radius: -0.6
+fit_log_outer_radius:  0.6
+fit_n_radii:           6
+r_min_fit:             0.0   # every bin reaches the fit
+
+fit_params:
+  # gamma: magnitude-gap slope on top of the Diemer19 c200m(M,z)
+  # prediction -- same role and same prior scale as gamma_cm in the
+  # combined-model production configs (wazp_desy3_inference_boost_floor6.yaml),
+  # wide/uninformative, this is the science target.
+  gamma:        {fit: true, prior: gaussian, loc: 0.0,   scale: 10.5}
+  log_M_norm:   {fit: true, prior: gaussian, loc: 0.0,   scale: 0.3}
+  alpha_mr:     {fit: true, prior: gaussian, loc: 1.356, scale: 0.5}
+  beta_mr:      {fit: true, prior: gaussian, loc: -0.30, scale: 0.3}
+  # Miscentering: flat/uninformative, no simulated truth to centre on.
+  f_mis:        {fit: true, prior: flat, lo: 0.0, hi: 1.0}
+  sigma_off:    {fit: true, prior: flat, lo: 0.0, hi: 1.0}
