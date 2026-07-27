@@ -31,7 +31,7 @@
 # ═══ Run phases ═══════════════════════════════════════════════════════════
 simulation: false
 inference:  true
-data_folder: gamma_scan_outputs/wazp_real_data_floor6
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data_floor6
 
 # ═══ Scan (shared) ════════════════════════════════════════════════════════
 gamma_range: [0.0, 0.0]
