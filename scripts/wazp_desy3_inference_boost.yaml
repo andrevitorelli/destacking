@@ -1,0 +1,113 @@
+# Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
+# prepare_real_data.py (wazp_desy3_real_data.yaml) into
+# /home/andre/destacking_data/real_data/wazp_real_data/simulation_g00_gamma+0.0/.
+#
+# Boost-corrected variant of wazp_desy3_inference.yaml: instead of an
+# informative prior nudging alpha_cm negative (that config's stopgap —
+# see project memory wazp-desy3-alpha-cm-informative-prior), this run
+# applies the ACTUAL boost correction the joint fit was missing. The joint
+# fit has no boost correction at all (prepare_real_data.py uses
+# bootstrap_signal, not single_cluster, by design); `boosts:` below
+# multiplies each cluster's ΔΣ (and scales its covariance) by its stack's
+# boost(R) model, fit in wazp_stacked_analysis.py's Stage 2b from the same
+# stacked boost profiles the stacked cross-check already uses. alpha_cm
+# reverts to the ORIGINAL wide, uninformative gaussian here — deliberately
+# NOT combined with the informative-prior workaround, so this run is a
+# clean test of whether the boost correction alone recovers a negative
+# alpha_cm.
+#
+# gamma_true=0.0 here is NOT a truth value — real clusters have no known
+# gamma. It is a pure directory-naming/metadata label (see
+# prepare_real_data.py's module docstring): read off gamma_est/sigma_gamma
+# and ignore every "bias"/"gamma_true_ols" column in the reports, since
+# there is no truth to compare against.
+#
+# 50 bootstraps (up from the 5-10 used in simulation testing) to get a
+# reliable posterior-mixture estimate on real, noisier, non-uniform data.
+# f_mis and sigma_off use flat (uninformative) priors over their full
+# physical range, rather than the gaussian-around-simulated-truth priors
+# used in the simulation tests — there is no truth to centre a gaussian on
+# for real data.  The mass-concentration/mass-richness relation priors are
+# unchanged from hisnr_tri_mis_wide.yaml's widened gaussians.
+#
+# Usage: python gamma_inference.py wazp_desy3_inference_boost.yaml
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: false
+inference:  true
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data
+
+# Per-cluster boost correction — see wazp_stacked_analysis.py's Stage 2b
+# and gamma_inference.py's `boosts:` handling (_apply_boost_correction).
+# Requires the checkpoint's cluster_obs to have a stack_name column
+# (regenerated via prepare_real_data.py after this feature was added).
+boosts: /home/andre/destacking_data/real_data/wazp_boost_fits.pkl
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0
+n_gamma:     1
+n_workers:   12
+
+n_clusters: 15967   # cosmetic only (report/plot titles) — the actual
+                    # bootstrap draw size follows the loaded data (n_data)
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 50
+timeout:     7200          # ~10.6x more clusters than the sim tests ->
+                           # each likelihood call costs proportionally more
+
+# Inference-only mode requires the fit radial grid explicitly — MUST match
+# the grid prepare_real_data.py measured on (log_inner_radius/log_outer_radius/
+# n_radii in wazp_desy3_real_data.yaml).
+fit_log_inner_radius: -0.8
+fit_log_outer_radius:  0.6
+fit_n_radii:           8
+# r_min_fit: 0.0 (was 0.5) — include every radial bin down to the
+# innermost one (~0.158 Mpc), testing project-memory hypothesis #2
+# (wazp-desy3-root-cause-hypotheses): r_min_fit=0.5 was excluding the
+# region closest to the NFW scale radius, which is what constrains
+# concentration most directly — that could starve the fit of exactly the
+# information needed to measure alpha_cm, independent of any data-quality
+# issue. Combined with the boost correction (`boosts:` above) and the
+# Dutton-Maccio-centred alpha_cm prior in this same run.
+#
+# The first r_min_fit=0.0 attempt (no wild_outlier_mask) collapsed —
+# bins below 0.5 Mpc include a large minority of unphysical per-cluster
+# ΔΣ values (huge negative or >10^4 Msun/pc^2) alongside genuinely
+# missing (NaN) measurements. wild_outlier_mask masks the former the
+# same way the latter is already masked (per-cluster, per-bin — see
+# fitting.cholog_gaussian), rather than a hard global cut on the whole
+# bin, so clusters with a clean inner measurement still contribute.
+r_min_fit:             0.0
+wild_outlier_mask:     true
+wild_outlier_rmax:     0.5     # matches the old r_min_fit cutoff
+wild_outlier_min:      0.0     # Msun/pc^2 — mask DeltaSigma <= this
+wild_outlier_max:      10000.0 # Msun/pc^2 — mask DeltaSigma >= this
+
+fit_params:
+  # Mass-concentration / mass-richness relations: same widened gaussian
+  # priors as hisnr_tri_mis_wide.yaml (no known truth for real data
+  # either, so keep them broad rather than tightening around an assumed
+  # value) — EXCEPT alpha_cm, see below.
+  c0:           {fit: true, prior: gaussian, loc: 4.5,   scale: 3.0}
+  # alpha_cm: centred on the Dutton & Maccio (2014) c-M slope (computed
+  # numerically via colossus at M200m, z=0.35, the pivot used elsewhere in
+  # this pipeline: log10(c) vs log10(M) is essentially flat at -0.088
+  # across the cluster mass range) — NOT truncated (unlike
+  # wazp_desy3_inference.yaml's stopgap prior). scale=0.3 is only slightly
+  # informative: about 3x the data's own resolving power on alpha_cm seen
+  # in the earlier wide-prior fit (posterior sigma ~0.11), so it nudges
+  # toward the physical sign without dominating the likelihood. This run
+  # isolates the boost correction's effect — alpha_cm is not forced
+  # negative by a hard truncation this time, only gently favoured.
+  alpha_cm:     {fit: true, prior: gaussian, loc: -0.088, scale: 0.3}
+  beta_cm:      {fit: true, prior: gaussian, loc: -0.4,  scale: 1.5}
+  gamma_cm:     {fit: true, prior: gaussian, loc: 0.0,   scale: 10.5}
+  log_M_norm:   {fit: true, prior: gaussian, loc: 0.0,   scale: 0.3}
+  alpha_mr:     {fit: true, prior: gaussian, loc: 1.356, scale: 0.5}
+  beta_mr:      {fit: true, prior: gaussian, loc: -0.30, scale: 0.3}
+  # Miscentering: flat/uninformative over the full physical range, as
+  # requested — no simulated truth to centre a gaussian on for real data.
+  f_mis:        {fit: true, prior: flat, lo: 0.0, hi: 1.0}
+  sigma_off:    {fit: true, prior: flat, lo: 0.0, hi: 1.0}

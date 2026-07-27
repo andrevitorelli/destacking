@@ -34,6 +34,14 @@ galaxy-level bootstrap gives the data vector and covariance from the same
 estimator, with no boost, exactly matching what the simulation pipeline in
 destacking.simulation produces for synthetic clusters.
 
+Background-galaxy selection happens here, NOT inside xlensing:
+xlensing.data.metacal_cluster_lensing no longer filters sources by
+redshift internally (that hardcoded cut was removed so it can be
+controlled and compared from the caller). ``background_strategy`` /
+``background_strategy_kwargs`` select and parameterise the selection
+(destacking.data.select_background); the default ("margin", factor=1.1,
+offset=0.2) reproduces the old hardcoded xlensing behaviour exactly.
+
 Usage
 -----
     python prepare_real_data.py my_real_data_config.yaml
@@ -257,7 +265,8 @@ def build_source_prefilter(cfg):
     """
     import h5py
 
-    cache      = _cfg(cfg, "filtered_cache", os.path.expanduser("~/destacking_data/real_data/metacal_filtered.npz"))
+    cache      = _cfg(cfg, "filtered_cache",
+                      os.path.expanduser("~/destacking_data/real_data/metacal_filtered.npz"))
     use_cache  = _cfg(cfg, "use_cache", True)
     metacal_f  = _cfg(cfg, "metacal_file", None, required=True)
     dnf_f      = _cfg(cfg, "dnf_file", None, required=True)
@@ -334,6 +343,10 @@ _RADIUS_MPC   = None
 _BIN_LIMITS   = None
 _N_COV_BOOT   = None
 _MIN_SOURCES  = None
+_BG_STRATEGY  = None
+_BG_KWARGS    = None
+_SIGMA_E      = None
+_FLOOR_RMAX   = None
 
 
 def _measure_cluster(args):
@@ -343,6 +356,7 @@ def _measure_cluster(args):
     (i, dv, cov, n_src) or (i, None, None, 0) on failure."""
     import xlensing.cosmo as _xlc
     from xlensing.data import bootstrap_signal, metacal_cluster_lensing
+    from destacking.data import select_background
 
     i, cid, ra_deg, dec_deg, z_cl = args
     try:
@@ -352,6 +366,16 @@ def _measure_cluster(args):
             return i, None, None, 0
         ang_r = _RADIUS_MPC / D_A
         idx = _TREE.query_radius(np.array([[dec_r, ra_r]]), r=ang_r)[0]
+        if len(idx) == 0:
+            return i, None, None, 0
+
+        # Background selection is caller-side now — xlensing applies no
+        # redshift filtering of its own (see project memory
+        # "xlensing background selection moved to caller"). Apply the
+        # configured strategy before building the source tuple.
+        bg_mask = select_background(_BG_STRATEGY, _SR["z"][idx], z_cl,
+                                    **_BG_KWARGS)
+        idx = idx[bg_mask]
         if len(idx) == 0:
             return i, None, None, 0
 
@@ -374,8 +398,18 @@ def _measure_cluster(args):
         # bootstrap_signal, NOT single_cluster: no boost correction, so the
         # data vector and covariance are consistent with the boost-free NFW
         # model gamma_inference.py fits. See module docstring.
+        #
+        # sigma_e/floor_rmax: floors each bin's bootstrap variance at the
+        # shot-noise-only lower bound sigma_e**2/sum((1+M)W/Sigma_crit**2)
+        # for bins below floor_rmax. Galaxy-level bootstrap with only 2-3
+        # galaxies in an inner annulus can land on an implausibly tiny
+        # variance by chance (their weighted ratio barely moves across
+        # resamples), which single-handedly dominates the joint likelihood
+        # once r_min_fit no longer excludes that bin — see project memory
+        # wazp-desy3-root-cause-hypotheses.
         sigmas, sigmas_cov, _, _ = bootstrap_signal(
-            stake, _BIN_LIMITS, Nboot=_N_COV_BOOT
+            stake, _BIN_LIMITS, Nboot=_N_COV_BOOT,
+            sigma_e=_SIGMA_E, floor_rmax=_FLOOR_RMAX,
         )
         valid_bins = np.isfinite(sigmas)
         if not valid_bins.any():
@@ -395,6 +429,7 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     ``<sim_subdir>/.partial.npz`` every ``checkpoint_every`` clusters and
     reloaded on a matching re-run (gated by use_cache)."""
     global _TREE, _SR, _RADIUS_MPC, _BIN_LIMITS, _N_COV_BOOT, _MIN_SOURCES
+    global _BG_STRATEGY, _BG_KWARGS, _SIGMA_E, _FLOOR_RMAX
     import multiprocess as mp
     from sklearn.neighbors import BallTree
 
@@ -404,6 +439,20 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     n_workers        = _cfg(cfg, "n_workers", 8, cast=int)
     checkpoint_every  = _cfg(cfg, "checkpoint_every", 1000, cast=int)
     use_cache        = _cfg(cfg, "use_cache", True)
+
+    # Shot-noise variance floor for low-galaxy-count bins (see
+    # _measure_cluster's comment). None (default) reproduces the old
+    # behaviour exactly -- no floor.
+    sigma_e    = _cfg(cfg, "sigma_e", None, cast=float)
+    floor_rmax = _cfg(cfg, "floor_rmax", None, cast=float)
+
+    # Background-galaxy selection: caller-side now (xlensing applies no
+    # redshift filtering internally any more). Default ("margin", factor
+    # 1.1, offset 0.2) reproduces the old hardcoded xlensing metacal
+    # behaviour exactly; override to test other selection strategies.
+    bg_strategy = _cfg(cfg, "background_strategy", "margin")
+    bg_kwargs   = _cfg(cfg, "background_strategy_kwargs",
+                       {"factor": 1.1, "offset": 0.2})
 
     log_inner = _cfg(cfg, "log_inner_radius", -0.8, cast=float)
     log_outer = _cfg(cfg, "log_outer_radius", 0.6, cast=float)
@@ -447,6 +496,8 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     _TREE, _SR = tree, sr
     _RADIUS_MPC, _BIN_LIMITS = radius_mpc, bin_limits
     _N_COV_BOOT, _MIN_SOURCES = n_cov_bootstrap, min_sources
+    _BG_STRATEGY, _BG_KWARGS = bg_strategy, bg_kwargs
+    _SIGMA_E, _FLOOR_RMAX = sigma_e, floor_rmax
 
     work = [
         (int(i), int(catalog["ID"][i]), float(catalog["RA"][i]),
@@ -497,6 +548,7 @@ def write_checkpoint(catalog, data_vectors, cov_matrices, radii, cfg,
                      sim_subdir):
     from astropy.table import Table
     from destacking.io import save_simulation_checkpoint
+    from destacking.data import assign_stack_bins
 
     n = len(catalog)
     z       = np.asarray(catalog["ZPHOT"], dtype=float)
@@ -512,8 +564,21 @@ def write_checkpoint(catalog, data_vectors, cov_matrices, radii, cfg,
               f"these, i.e. no gamma correction) but flagged for review",
               flush=True)
 
-    # cluster_obs: the REAL observables the fit reads (z, Lambda, delta_m).
-    cluster_obs = Table({"z": z, "Lambda": lam, "delta_m": delta_m})
+    # Stack membership (3 z x 4 NGALS x 2 delta_m, median-split per cell) —
+    # same binning wazp_stacked_analysis.py stacks clusters and fits a
+    # boost(R) model under (destacking.data.assign_stack_bins, shared so
+    # the two never disagree). Lets gamma_inference.py's `boosts:` config
+    # key look up and apply each cluster's stack's fitted boost correction.
+    _, _, _, _, stack_name = assign_stack_bins(z, lam, delta_m)
+    n_stacked = int((stack_name != "").sum())
+    print(f"  {n_stacked:,}/{n:,} clusters assigned a boost-fit stack "
+          f"({n - n_stacked:,} outside the z/richness/delta_m bin ranges)",
+          flush=True)
+
+    # cluster_obs: the REAL observables the fit reads (z, Lambda, delta_m),
+    # plus stack_name for the optional boost correction.
+    cluster_obs = Table({"z": z, "Lambda": lam, "delta_m": delta_m,
+                         "stack_name": stack_name})
 
     # truth_catalog: schema-compatible placeholder. M_halo/concentration are
     # genuinely unknown for real data and are never read by the inference

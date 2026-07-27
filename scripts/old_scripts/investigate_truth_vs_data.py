@@ -1,5 +1,13 @@
 """
-Test whether the γ̂≈-0.5 plateau is a parametrization issue.
+REVIEWER VALIDATION SCRIPT — spherical-model-vs-triaxial-data profile check.
+
+Test whether recovered-gamma bias at a given gamma_true is a
+parametrization issue rather than a triaxial-vs-spherical projection
+effect. Requires a gamma_inference.py SIMULATION run (simulation: true)
+whose simulation_g*/ checkpoints (truth_catalog.npz, cluster_obs.npz,
+simulated_data.npz, ols.json) haven't been cleaned up — only run for
+gamma_true <= 0.0 points, historically the regime where a gamma_hat
+plateau was seen.
 
 For each negative-γ_true simulation, we evaluate three things:
 
@@ -20,6 +28,21 @@ preference.
 Outputs into RUN_DIR/plateau/:
   truth_vs_param_profile.png  — mean ΔΣ comparison
   truth_vs_param_summary.json
+
+Usage:
+  python investigate_truth_vs_data.py RUN_DIR
+  python investigate_truth_vs_data.py   # uses the latest run in
+                                         # ~/destacking_data/output/
+
+Fixed 2026-07-27: forward_model_combined's alpha/beta/gamma kwargs were
+renamed alpha_cm/beta_cm/gamma_cm since this script was last touched
+(mass-concentration/richness naming split); the fixed radial grid
+(RADII = np.logspace(-0.8, 0.8, 12)) also didn't match every run's actual
+sim_log_inner_radius/sim_log_outer_radius/sim_n_radii — now reconstructed
+per-run from RUN_DIR's saved YAML config (see load_radii()). Verified
+against a fresh 3-gamma-point smoke-test scan (150 clusters); (A) and (B)
+track each other closely as expected, with residual noise against the
+data mean set by the small clusters sample size.
 """
 
 from __future__ import annotations
@@ -33,6 +56,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 from astropy.table import Table
 
 from destacking.fitting import cholog_gaussian
@@ -43,7 +67,6 @@ from destacking.model import (
 from astropy.cosmology import Planck18 as _planck18
 
 DELTA_M_REF = 0.1
-RADII       = np.logspace(-0.8, 0.8, 12)
 R_MIN_FIT   = 0.5
 F_CEN       = 0.64
 SIGMA_OFF_MPC_H = 0.32
@@ -51,13 +74,30 @@ SIGMA_OFF_MPC = SIGMA_OFF_MPC_H / float(_planck18.h)
 
 
 def find_latest_run():
-    base = "gamma_scan_outputs"
+    base = os.path.expanduser("~/destacking_data/output")
     runs = sorted(
         (d for d in os.listdir(base) if d.startswith("run_")),
         key=lambda d: os.path.getmtime(os.path.join(base, d)),
         reverse=True,
     )
     return os.path.join(base, runs[0])
+
+
+def load_radii(run_dir):
+    """Reconstruct the simulated radial grid from the run's saved YAML
+    config (gamma_inference.py copies its config into RUN_DIR/*.yaml).
+    Falls back to the historical default grid if no config is found, for
+    old runs predating that checkpoint."""
+    import glob
+    for cfg_path in glob.glob(os.path.join(run_dir, "*.yaml")):
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        if "sim_log_inner_radius" in cfg:
+            return np.logspace(
+                cfg["sim_log_inner_radius"], cfg["sim_log_outer_radius"],
+                int(cfg["sim_n_radii"]),
+            )
+    return np.logspace(-0.8, 0.8, 12)
 
 
 def parse_gamma(sim_dir):
@@ -91,6 +131,7 @@ def main():
     sims = [(parse_gamma(d), d) for d in sim_dirs]
     sims = [(g, d) for g, d in sims if g is not None and g <= 0.0]
 
+    RADII = load_radii(run_dir)
     keep = RADII >= R_MIN_FIT
     R_fit = RADII[keep]
 
@@ -120,9 +161,9 @@ def main():
 
         # (B) parametric inference model at γ=γ_true with OLS coefficients
         ds_param_true = forward_model_combined(
-            c0=ols["c0_true"], alpha=ols["alpha_true"], gamma=float(gamma_true),
+            c0=ols["c0_true"], alpha_cm=ols["alpha_true"], gamma_cm=float(gamma_true),
             cluster_table=obs, radii=R_fit,
-            beta=ols["beta_true"],
+            beta_cm=ols["beta_true"],
             M_pivot_log=_MC_M_PIVOT_LOG, z_ref=_MC_Z_REF,
             delta_m_ref=DELTA_M_REF, log_M_norm=0.0,
             FMISS=fmiss, SIGMA_OFF=sigoff, BCG_B_MASS=None,
@@ -130,9 +171,9 @@ def main():
 
         # (C) parametric inference model at γ=-0.5 with OLS coefficients
         ds_param_m05 = forward_model_combined(
-            c0=ols["c0_true"], alpha=ols["alpha_true"], gamma=-0.5,
+            c0=ols["c0_true"], alpha_cm=ols["alpha_true"], gamma_cm=-0.5,
             cluster_table=obs, radii=R_fit,
-            beta=ols["beta_true"],
+            beta_cm=ols["beta_true"],
             M_pivot_log=_MC_M_PIVOT_LOG, z_ref=_MC_Z_REF,
             delta_m_ref=DELTA_M_REF, log_M_norm=0.0,
             FMISS=fmiss, SIGMA_OFF=sigoff, BCG_B_MASS=None,

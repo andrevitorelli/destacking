@@ -5,9 +5,49 @@ from destacking.simulation import (
     make_test_data,
     _sample_powerlaw_lf,
     _pivot_from_delta_m,
+    SimulationConfig,
+    build_truth_catalog,
+    compute_triaxial_shapes,
+    compute_miscentering,
 )
 
 RADII = np.logspace(-0.6, 0.6, 8)
+
+
+def _bin_limits(radii):
+    # Bin-edge convention from CLAUDE.md / scripts/gamma_inference.py:
+    # half-bin-width offset in log-space around each radius.
+    log_r = np.log10(radii)
+    dlog  = np.diff(log_r)[0]
+    edges = np.logspace(log_r[0] - dlog / 2, log_r[-1] + dlog / 2,
+                        len(radii) + 1)
+    return np.column_stack([edges[:-1], edges[1:]])
+
+
+def _make_sim_config(n_clusters=3, n_workers=1, miscentering=True,
+                     spherical=False):
+    return SimulationConfig(
+        n_clusters=n_clusters,
+        z_cluster_range=(0.10, 0.60),
+        logm_range=(13.5, 15.0),
+        lambda_min=20.0,
+        delta_m_ref=0.1,
+        density=7.5,
+        shape_noise=0.27,
+        width_rad=0.006,
+        z_src_range=(0.0, 2.5),
+        z_src_alpha=2.0,
+        z_src_beta=1.5,
+        z_src_z0=0.4,
+        spherical=spherical,
+        miscentering=miscentering,
+        f_cen=0.64,
+        sigma_off_mpc=0.32,
+        radii=RADII,
+        bin_limits=_bin_limits(RADII),
+        n_cov_bootstrap=20,
+        n_workers=n_workers,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -368,3 +408,224 @@ def test_simcluster_smoke():
     assert set(["ra", "dec", "z", "e1", "e2",
                 "R11", "R12", "R21", "R22", "w"]).issubset(cat.colnames)
     assert len(cat) > 0
+
+
+# ---------------------------------------------------------------------------
+# SimulationConfig
+# ---------------------------------------------------------------------------
+
+def test_simulation_config_fields_accessible():
+    cfg = _make_sim_config()
+    assert cfg.n_clusters == 3
+    assert cfg.z_cluster_range == (0.10, 0.60)
+    assert cfg.n_workers == 1
+
+
+def test_simulation_config_n_bins_property():
+    cfg = _make_sim_config()
+    assert cfg.n_bins == len(RADII)
+
+
+def test_simulation_config_n_workers_default():
+    # n_workers has a default (=15) so it can be omitted.
+    cfg = SimulationConfig(
+        n_clusters=1, z_cluster_range=(0.1, 0.6), logm_range=(13.5, 15.0),
+        lambda_min=20.0, delta_m_ref=0.1, density=7.5, shape_noise=0.27,
+        width_rad=0.006, z_src_range=(0.0, 2.5), z_src_alpha=2.0,
+        z_src_beta=1.5, z_src_z0=0.4, spherical=False, miscentering=True,
+        f_cen=0.64, sigma_off_mpc=0.32, radii=RADII,
+        bin_limits=_bin_limits(RADII), n_cov_bootstrap=20,
+    )
+    assert cfg.n_workers == 15
+
+
+# ---------------------------------------------------------------------------
+# build_truth_catalog
+# ---------------------------------------------------------------------------
+
+def test_build_truth_catalog_returns_n_clusters():
+    cfg = _make_sim_config(n_clusters=25)
+    truth, ols = build_truth_catalog(0.0, g_idx=0, cfg=cfg)
+    assert len(truth) == 25
+
+
+def test_build_truth_catalog_columns():
+    cfg = _make_sim_config(n_clusters=10)
+    truth, ols = build_truth_catalog(0.0, g_idx=0, cfg=cfg)
+    for col in ("z", "M_halo", "concentration", "delta_m", "Lambda"):
+        assert col in truth.colnames
+
+
+def test_build_truth_catalog_selection_cuts_applied():
+    cfg = _make_sim_config(n_clusters=10)
+    truth, ols = build_truth_catalog(0.0, g_idx=1, cfg=cfg)
+    assert np.all(np.asarray(truth["Lambda"]) > cfg.lambda_min)
+    assert np.all(np.asarray(truth["delta_m"]) > 0.0)
+    assert np.all(np.isfinite(np.asarray(truth["delta_m"])))
+    z = np.asarray(truth["z"])
+    assert np.all(z >= cfg.z_cluster_range[0])
+    assert np.all(z < cfg.z_cluster_range[1])
+
+
+def test_build_truth_catalog_ols_keys():
+    cfg = _make_sim_config(n_clusters=15)
+    truth, ols = build_truth_catalog(0.2, g_idx=2, cfg=cfg)
+    for key in ("c0_true", "alpha_true", "beta_true", "gamma_true_ols"):
+        assert key in ols
+        assert np.isfinite(ols[key])
+
+
+def test_build_truth_catalog_gamma_true_ols_recovers_injected_gamma():
+    # The OLS fit is a linear (c0, alpha, beta, gamma) approximation of the
+    # true (Dutton-Maccio-based) concentration relation, so it recovers
+    # gamma_true closely but not exactly -- the mismatch is the linear
+    # model's residual against the true nonlinear c-M-z-dm relation.
+    cfg = _make_sim_config(n_clusters=200)
+    truth, ols = build_truth_catalog(0.4, g_idx=3, cfg=cfg)
+    assert ols["gamma_true_ols"] == pytest.approx(0.4, abs=0.01)
+
+
+def test_build_truth_catalog_reproducible_with_same_g_idx():
+    cfg = _make_sim_config(n_clusters=10)
+    truth1, ols1 = build_truth_catalog(0.1, g_idx=4, cfg=cfg)
+    truth2, ols2 = build_truth_catalog(0.1, g_idx=4, cfg=cfg)
+    np.testing.assert_array_equal(
+        np.asarray(truth1["M_halo"]), np.asarray(truth2["M_halo"])
+    )
+    assert ols1 == ols2
+
+
+def test_build_truth_catalog_different_g_idx_differ():
+    cfg = _make_sim_config(n_clusters=10)
+    truth1, _ = build_truth_catalog(0.1, g_idx=5, cfg=cfg)
+    truth2, _ = build_truth_catalog(0.1, g_idx=6, cfg=cfg)
+    assert not np.allclose(
+        np.asarray(truth1["M_halo"]), np.asarray(truth2["M_halo"])
+    )
+
+
+# ---------------------------------------------------------------------------
+# compute_triaxial_shapes
+# ---------------------------------------------------------------------------
+
+def test_compute_triaxial_shapes_keys_and_length():
+    cfg = _make_sim_config(n_clusters=10)
+    truth, _ = build_truth_catalog(0.0, g_idx=7, cfg=cfg)
+    shapes = compute_triaxial_shapes(truth, g_idx=7)
+    for key in ("q_ba", "q_ca", "theta_los", "phi_los", "r_vir"):
+        assert key in shapes
+        assert len(shapes[key]) == len(truth)
+
+
+def test_compute_triaxial_shapes_axis_ratios_in_range():
+    cfg = _make_sim_config(n_clusters=20)
+    truth, _ = build_truth_catalog(0.0, g_idx=8, cfg=cfg)
+    shapes = compute_triaxial_shapes(truth, g_idx=8)
+    assert np.all(shapes["q_ba"] >= 0.5) and np.all(shapes["q_ba"] <= 1.0)
+    assert np.all(shapes["q_ca"] >= 0.3)
+    assert np.all(shapes["q_ca"] <= shapes["q_ba"])
+
+
+def test_compute_triaxial_shapes_reproducible():
+    cfg = _make_sim_config(n_clusters=10)
+    truth, _ = build_truth_catalog(0.0, g_idx=9, cfg=cfg)
+    s1 = compute_triaxial_shapes(truth, g_idx=9)
+    s2 = compute_triaxial_shapes(truth, g_idx=9)
+    np.testing.assert_array_equal(s1["q_ba"], s2["q_ba"])
+    np.testing.assert_array_equal(s1["theta_los"], s2["theta_los"])
+
+
+# ---------------------------------------------------------------------------
+# compute_miscentering
+# ---------------------------------------------------------------------------
+
+def test_compute_miscentering_disabled_returns_all_centred():
+    cfg = _make_sim_config(n_clusters=15, miscentering=False)
+    is_mis, off_mag_mpc, phi_mis = compute_miscentering(g_idx=0, cfg=cfg)
+    assert is_mis.shape == (15,)
+    assert not np.any(is_mis)
+    np.testing.assert_array_equal(off_mag_mpc, 0.0)
+    np.testing.assert_array_equal(phi_mis, 0.0)
+
+
+def test_compute_miscentering_enabled_has_some_miscentered():
+    cfg = _make_sim_config(n_clusters=500, miscentering=True)
+    is_mis, off_mag_mpc, phi_mis = compute_miscentering(g_idx=1, cfg=cfg)
+    # f_cen=0.64 -> ~36% miscentered; just check it's neither 0% nor 100%.
+    frac = is_mis.mean()
+    assert 0.1 < frac < 0.6
+
+
+def test_compute_miscentering_offset_nonnegative():
+    cfg = _make_sim_config(n_clusters=200, miscentering=True)
+    is_mis, off_mag_mpc, phi_mis = compute_miscentering(g_idx=2, cfg=cfg)
+    assert np.all(off_mag_mpc >= 0.0)
+    # Centred clusters have exactly zero offset.
+    np.testing.assert_array_equal(off_mag_mpc[~is_mis], 0.0)
+
+
+def test_compute_miscentering_phi_in_full_circle():
+    cfg = _make_sim_config(n_clusters=200, miscentering=True)
+    _, _, phi_mis = compute_miscentering(g_idx=3, cfg=cfg)
+    assert np.all(phi_mis >= 0.0) and np.all(phi_mis <= 2 * np.pi)
+
+
+def test_compute_miscentering_reproducible():
+    cfg = _make_sim_config(n_clusters=50, miscentering=True)
+    r1 = compute_miscentering(g_idx=4, cfg=cfg)
+    r2 = compute_miscentering(g_idx=4, cfg=cfg)
+    for a, b in zip(r1, r2):
+        np.testing.assert_array_equal(a, b)
+
+
+# ---------------------------------------------------------------------------
+# simulate_lensing — full per-cluster simulation + measurement pipeline.
+# Marked slow: launches a real (tiny) multiprocess pool and runs the full
+# xlensing shear-injection + bootstrap_signal measurement per cluster.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_simulate_lensing_returns_expected_shapes():
+    from destacking.simulation import simulate_lensing
+    cfg = _make_sim_config(n_clusters=3, n_workers=1)
+    truth, _ = build_truth_catalog(0.0, g_idx=100, cfg=cfg)
+    shapes = compute_triaxial_shapes(truth, g_idx=100)
+    mis = compute_miscentering(g_idx=100, cfg=cfg)
+
+    data_vectors, cov_matrices, bgs = simulate_lensing(
+        truth, shapes, mis, g_idx=100, cfg=cfg,
+    )
+    assert data_vectors.shape == (cfg.n_clusters, cfg.n_bins)
+    assert cov_matrices.shape == (cfg.n_clusters, cfg.n_bins, cfg.n_bins)
+    assert len(bgs) == cfg.n_clusters
+
+
+@pytest.mark.slow
+def test_simulate_lensing_produces_some_finite_clusters():
+    from destacking.simulation import simulate_lensing
+    cfg = _make_sim_config(n_clusters=3, n_workers=1)
+    truth, _ = build_truth_catalog(0.0, g_idx=101, cfg=cfg)
+    shapes = compute_triaxial_shapes(truth, g_idx=101)
+    mis = compute_miscentering(g_idx=101, cfg=cfg)
+
+    data_vectors, cov_matrices, bgs = simulate_lensing(
+        truth, shapes, mis, g_idx=101, cfg=cfg,
+    )
+    # At least one cluster/bin should have succeeded (not every entry NaN);
+    # a total dropout would indicate the pipeline is fundamentally broken.
+    assert np.isfinite(data_vectors).any()
+
+
+@pytest.mark.slow
+def test_simulate_lensing_spherical_mode_runs():
+    from destacking.simulation import simulate_lensing
+    cfg = _make_sim_config(n_clusters=2, n_workers=1, spherical=True,
+                           miscentering=False)
+    truth, _ = build_truth_catalog(0.0, g_idx=102, cfg=cfg)
+    shapes = compute_triaxial_shapes(truth, g_idx=102)
+    mis = compute_miscentering(g_idx=102, cfg=cfg)
+
+    data_vectors, cov_matrices, bgs = simulate_lensing(
+        truth, shapes, mis, g_idx=102, cfg=cfg,
+    )
+    assert data_vectors.shape == (cfg.n_clusters, cfg.n_bins)

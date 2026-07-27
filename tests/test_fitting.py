@@ -1,11 +1,14 @@
 import numpy as np
 import pytest
+from astropy.table import Table
 from scipy.stats import multivariate_normal, norm as sp_norm
 from destacking.fitting import (
     cholog_gaussian,
     log_likelihood,
     log_likelihood_mc,
     log_likelihood_combined,
+    log_likelihood_diemer,
+    log_likelihood_combined_resampled,
 )
 from destacking.simulation import generate_truth_catalog, make_test_data
 
@@ -264,6 +267,129 @@ def test_log_likelihood_combined_FMISS_changes_value(combined_dataset):
 
 
 # ---------------------------------------------------------------------------
+# log_likelihood_diemer — Diemer19 M-c baseline + magnitude-gap gamma
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def diemer_dataset():
+    truth = generate_truth_catalog(20, seed=42, delta_m_gamma=0.0)
+    cluster_obs, data_vectors, cov_matrices = make_test_data(
+        truth, RADII, fractional_noise=0.2, poisson_richness=False, seed=7,
+    )
+    return cluster_obs, data_vectors, cov_matrices
+
+
+def test_log_likelihood_diemer_finite(diemer_dataset):
+    cluster_obs, data, cov = diemer_dataset
+    ll = log_likelihood_diemer(0.2, cluster_obs, data, cov, RADII)
+    assert np.isfinite(ll)
+
+
+def test_log_likelihood_diemer_A_invalid_returns_neg_inf(diemer_dataset):
+    cluster_obs, data, cov = diemer_dataset
+    assert log_likelihood_diemer(0.2, cluster_obs, data, cov, RADII, A=0.0) == -np.inf
+    assert log_likelihood_diemer(0.2, cluster_obs, data, cov, RADII, A=-1.0) == -np.inf
+
+
+def test_log_likelihood_diemer_never_returns_nan(diemer_dataset):
+    cluster_obs, data, cov = diemer_dataset
+    rng = np.random.default_rng(0)
+    for _ in range(15):
+        gamma = float(rng.uniform(-5.0, 5.0))
+        ll = log_likelihood_diemer(gamma, cluster_obs, data, cov, RADII)
+        assert not np.isnan(ll), f"NaN return for gamma={gamma}"
+
+
+def test_log_likelihood_diemer_FMISS_changes_value(diemer_dataset):
+    cluster_obs, data, cov = diemer_dataset
+    N = len(cluster_obs)
+    ll_centred = log_likelihood_diemer(
+        0.2, cluster_obs, data, cov, RADII,
+        FMISS=np.zeros(N), SIGMA_OFF=np.ones(N) * 0.3,
+    )
+    ll_misc = log_likelihood_diemer(
+        0.2, cluster_obs, data, cov, RADII,
+        FMISS=np.ones(N), SIGMA_OFF=np.ones(N) * 0.3,
+    )
+    assert ll_centred != ll_misc
+
+
+def test_log_likelihood_diemer_log_M_norm_changes_result(diemer_dataset):
+    cluster_obs, data, cov = diemer_dataset
+    ll_0   = log_likelihood_diemer(0.2, cluster_obs, data, cov, RADII, log_M_norm=0.0)
+    ll_off = log_likelihood_diemer(0.2, cluster_obs, data, cov, RADII, log_M_norm=0.5)
+    assert ll_0 != ll_off
+
+
+# ---------------------------------------------------------------------------
+# log_likelihood_combined_resampled — bootstrap-over-clusters likelihood
+# ---------------------------------------------------------------------------
+
+def test_log_likelihood_combined_resampled_finite(combined_dataset):
+    cluster_obs, data, cov = combined_dataset
+    N = len(cluster_obs)
+    rng = np.random.default_rng(1)
+    ll = log_likelihood_combined_resampled(
+        5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+        n_resample=N, rng=rng,
+    )
+    assert np.isfinite(ll)
+
+
+def test_log_likelihood_combined_resampled_smaller_subsample_still_finite(combined_dataset):
+    cluster_obs, data, cov = combined_dataset
+    rng = np.random.default_rng(2)
+    ll = log_likelihood_combined_resampled(
+        5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+        n_resample=10, replace=False, rng=rng,
+    )
+    assert np.isfinite(ll)
+
+
+def test_log_likelihood_combined_resampled_matches_full_when_all_selected(combined_dataset):
+    # replace=False with n_resample=N draws every cluster exactly once (in
+    # some permutation order); the joint Gaussian likelihood is invariant
+    # to cluster order, so this must equal the unresampled likelihood.
+    cluster_obs, data, cov = combined_dataset
+    N = len(cluster_obs)
+    rng = np.random.default_rng(3)
+    ll_resampled = log_likelihood_combined_resampled(
+        5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+        n_resample=N, replace=False, rng=rng,
+    )
+    ll_full = log_likelihood_combined(5.0, -0.1, 0.0, cluster_obs, data, cov, RADII)
+    np.testing.assert_allclose(ll_resampled, ll_full, rtol=1e-10)
+
+
+def test_log_likelihood_combined_resampled_stochastic_across_calls(combined_dataset):
+    # With replacement and no explicit rng, repeated calls draw different
+    # cluster subsets and should (generically) give different values.
+    cluster_obs, data, cov = combined_dataset
+    N = len(cluster_obs)
+    lls = [
+        log_likelihood_combined_resampled(
+            5.0, -0.1, 0.0, cluster_obs, data, cov, RADII, n_resample=N,
+        )
+        for _ in range(5)
+    ]
+    assert len(set(lls)) > 1
+
+
+def test_log_likelihood_combined_resampled_reproducible_with_same_rng_state(combined_dataset):
+    cluster_obs, data, cov = combined_dataset
+    N = len(cluster_obs)
+    ll1 = log_likelihood_combined_resampled(
+        5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+        n_resample=N, rng=np.random.default_rng(42),
+    )
+    ll2 = log_likelihood_combined_resampled(
+        5.0, -0.1, 0.0, cluster_obs, data, cov, RADII,
+        n_resample=N, rng=np.random.default_rng(42),
+    )
+    assert ll1 == ll2
+
+
+# ---------------------------------------------------------------------------
 # Sampler smoke tests — minimal n_live to keep total wall time small.
 # Marked as `slow` so users can de-select with -m "not slow".
 # ---------------------------------------------------------------------------
@@ -309,3 +435,63 @@ def test_run_sampler_combined_runs_and_returns_finite(combined_dataset):
                                    "log_M_norm"]
     assert np.any(np.isfinite(log_w))
     assert not np.any(np.isnan(log_w))
+
+
+@pytest.mark.slow
+def test_run_sampler_diemer_runs_and_returns_finite(diemer_dataset):
+    from destacking.fitting import run_sampler_diemer
+    cluster_obs, data, cov = diemer_dataset
+    priors = {
+        "gamma":      sp_norm(loc=0.0, scale=1.0),
+        "log_M_norm": sp_norm(loc=0.0, scale=0.1),
+    }
+    sampler = run_sampler_diemer(
+        cluster_obs, data, cov, RADII,
+        priors=priors,
+        n_live=30, verbose=False,
+    )
+    points, log_w, log_l = sampler.posterior()
+    assert points.shape[0] > 0
+    assert points.shape[1] == 2  # gamma, log_M_norm
+    assert sampler.param_order == ["gamma", "log_M_norm"]
+    assert np.any(np.isfinite(log_w))
+    assert not np.any(np.isnan(log_w))
+
+
+@pytest.mark.slow
+def test_run_sampler_diemer_requires_gamma():
+    from destacking.fitting import run_sampler_diemer
+    with pytest.raises(KeyError, match="gamma"):
+        run_sampler_diemer(
+            Table({"z": [0.3], "Lambda": [40.0], "delta_m": [0.5]}),
+            np.zeros((1, len(RADII))),
+            np.eye(len(RADII))[np.newaxis],
+            RADII,
+            priors={"log_M_norm": sp_norm(loc=0.0, scale=0.1)},
+            n_live=10, verbose=False,
+        )
+
+
+@pytest.mark.slow
+def test_run_sampler_combined_resampled_runs_and_returns_finite(combined_dataset):
+    from destacking.fitting import run_sampler_combined_resampled
+    cluster_obs, data, cov = combined_dataset
+    priors = {
+        "c0":         sp_norm(loc=5.0, scale=0.5),
+        "alpha":      sp_norm(loc=-0.1, scale=0.05),
+        "beta":       sp_norm(loc=-0.4, scale=0.2),
+        "gamma":      sp_norm(loc=0.0,  scale=1.0),
+        "log_M_norm": sp_norm(loc=0.0,  scale=0.1),
+    }
+    sampler = run_sampler_combined_resampled(
+        cluster_obs, data, cov, RADII,
+        n_resample=len(cluster_obs),
+        priors=priors, fit_beta=True,
+        n_live=30, verbose=False,
+    )
+    points, log_w, log_l = sampler.posterior()
+    assert points.shape[0] > 0
+    assert points.shape[1] == 5  # c0, alpha, beta, gamma, log_M_norm
+    assert np.any(np.isfinite(log_w))
+    assert not np.any(np.isnan(log_w))
+    assert hasattr(sampler, "converged")

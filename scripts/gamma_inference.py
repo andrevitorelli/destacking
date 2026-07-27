@@ -297,6 +297,51 @@ else:
 # the data products but excluded from the likelihood).
 R_MIN_FIT   = float(_cfg("r_min_fit", "R_MIN_FIT", 0.5, cast=float))
 
+# Optional per-entry wild-outlier masking, applied only to bins below
+# wild_outlier_rmax (default matches the historical r_min_fit=0.5 default).
+# Per-cluster ΔΣ there is dominated by shot noise from too few background
+# sources in a tiny inner annulus (see project memory
+# wazp-desy3-root-cause-hypotheses): most clusters have NO measurement at
+# all, and a further chunk of the ones that do are unphysical (very large
+# negative or huge positive values). Rather than a hard global r_min_fit
+# cut discarding the whole radial bin for every cluster, this masks only
+# the individual entries outside [wild_outlier_min, wild_outlier_max] to
+# NaN, the same way missing measurements are already masked — clusters
+# that happen to have a clean measurement in these bins still contribute
+# there (see cholog_gaussian's per-cluster NaN masking in fitting.py).
+# Off by default; set r_min_fit: 0 alongside this to actually let those
+# bins reach the likelihood.
+WILD_OUTLIER_MASK = _yaml_bool(_cfg("wild_outlier_mask", "WILD_OUTLIER_MASK",
+                                    False))
+WILD_OUTLIER_RMAX = float(_cfg("wild_outlier_rmax", "WILD_OUTLIER_RMAX",
+                               0.5, cast=float))
+WILD_OUTLIER_MIN  = float(_cfg("wild_outlier_min", "WILD_OUTLIER_MIN",
+                               0.0, cast=float))
+WILD_OUTLIER_MAX  = float(_cfg("wild_outlier_max", "WILD_OUTLIER_MAX",
+                               10000.0, cast=float))
+
+# Optional per-cluster boost correction: 'boosts: <path>' points at a
+# wazp_stacked_analysis.py Stage 2b boost_fits pickle (data/wazp_boost_fits.pkl),
+# keyed by stack name ("z{i}_ng{j}_dm{k}"), each a
+# {B0, Rs, alpha, ...} cluster_toolkit.boostfactors.boost_powerlaw_at_R fit.
+# The checkpoint's cluster_obs must have a 'stack_name' column (written by
+# prepare_real_data.py via destacking.data.assign_stack_bins) — every
+# cluster's ΔΣ data vector and covariance get multiplied by its stack's
+# fitted boost(R) before fitting. This is a deterministic point-estimate
+# correction (no boost-uncertainty propagation) applied once, before the
+# bootstrap loop, since it does not depend on which bootstrap draws which
+# cluster. See project memory wazp-desy3-alpha-cm-informative-prior — the
+# joint fit otherwise has NO boost correction at all (unlike the stacked
+# pipeline, which applies one internally via stacked_signal).
+BOOSTS_FILE = _cfg("boosts", "BOOSTS_FILE", None)
+if BOOSTS_FILE is not None:
+    with open(BOOSTS_FILE, "rb") as _bf:
+        import pickle as _pickle
+        _boost_data = _pickle.load(_bf)
+    BOOST_FITS = _boost_data["boost_fits"]
+else:
+    BOOST_FITS = None
+
 _Z_CL_RANGE              = _cfg("z_cluster_range", None, [0.10, 0.60])
 DES_Y3_Z_CLUSTER_RANGE = (float(_Z_CL_RANGE[0]), float(_Z_CL_RANGE[1]))
 WAZP_LOGM_RANGE        = (14.0, 15.0)
@@ -376,8 +421,11 @@ _FIT_PARAM_NAMES = tuple(_FIT_PARAM_LABELS)
 # f_mis is a fraction and sigma_off is a scale radius — both are physically
 # bounded regardless of what the user's Gaussian prior says, so a 'gaussian'
 # fit_params entry for these two names is truncated to its physical range
-# rather than left as an unbounded normal (which can sample negative
-# sigma_off or f_mis outside [0, 1] once the prior is widened).
+# by default (rather than left as an unbounded normal, which can sample
+# negative sigma_off or f_mis outside [0, 1] once the prior is widened).
+# Any parameter's 'gaussian' entry can also set explicit 'lo'/'hi' keys
+# directly (see _prior_from_spec) — those take priority over this table,
+# which only supplies the default when lo/hi are omitted.
 _GAUSSIAN_PRIOR_BOUNDS = {
     "f_mis":     (0.0, 1.0),
     "sigma_off": (0.0, None),
@@ -401,9 +449,20 @@ def _prior_from_spec(name, spec):
                         f"fit_params.{name}: prior 'gaussian' requires '{k}'"
                     )
             loc, scale = float(spec["loc"]), float(spec["scale"])
-            bounds = _GAUSSIAN_PRIOR_BOUNDS.get(name)
-            if bounds is not None:
-                lo, hi = bounds
+            # Truncation: explicit lo/hi in the spec win; otherwise fall
+            # back to the hardcoded physical bounds above (f_mis/sigma_off
+            # only). One-sided truncation (only lo or only hi given) is
+            # fine — the other side is left at +/-inf.
+            has_lo, has_hi = "lo" in spec, "hi" in spec
+            if has_lo or has_hi:
+                lo = float(spec["lo"]) if has_lo else None
+                hi = float(spec["hi"]) if has_hi else None
+            else:
+                bounds = _GAUSSIAN_PRIOR_BOUNDS.get(name)
+                lo, hi = bounds if bounds is not None else (None, None)
+            if lo is not None and hi is not None and not hi > lo:
+                raise SystemExit(f"fit_params.{name}: 'hi' must exceed 'lo'")
+            if lo is not None or hi is not None:
                 a = -np.inf if lo is None else (lo - loc) / scale
                 b = np.inf if hi is None else (hi - loc) / scale
                 return "sample", sp_truncnorm(a, b, loc=loc, scale=scale)
@@ -514,9 +573,13 @@ N_LIVE  = 400
 TIMEOUT = int(_cfg("timeout", "TIMEOUT", 600, cast=int))
 
 _DEFAULT_RUN_TS = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+# nautilus output chains (bootstrap posteriors, corner plots, summaries)
+# live outside the repo -- moved 2026-07-27, see project memory
+# real-data-relocated.
 RUN_DIR = os.environ.get(
     "RUN_DIR",
-    os.path.join(os.path.expanduser("~/destacking_data/output"), f"run_{_DEFAULT_RUN_TS}"),
+    os.path.join(os.path.expanduser("~/destacking_data/output"),
+                f"run_{_DEFAULT_RUN_TS}"),
 )
 # RUN_DIR is only a path here; it is created (and the config copied into
 # it) inside main(), so importing this module for analysis leaves no
@@ -564,7 +627,10 @@ def simulate_lensing(truth, shapes, mis, g_idx):
 
 
 # ── Notebook-compatible per-gamma sim data ────────────────────────────────────
-
+# Simulated outputs live outside the repo (moved 2026-07-27, see project
+# memory sim-data-relocated) -- real WaZP/DES-Y3 data stays under
+# notebooks/data/, but this writes SIMULATED per-gamma data in the same
+# notebook-compatible layout, so it goes to the sims directory instead.
 _NOTEBOOK_DATA_DIR = os.path.expanduser("~/destacking_data/sims")
 
 
@@ -851,6 +917,52 @@ def simulate_one_gamma(g_idx, gamma_true, sim_subdir):
 
 # ── Inference phase ───────────────────────────────────────────────────────────
 
+def _apply_boost_correction(cluster_obs, data_vectors_fit, cov_matrices_fit,
+                            RADII_fit):
+    """Multiply each cluster's data vector/covariance by its stack's fitted
+    boost(R), from BOOST_FITS (loaded from the `boosts:` config path).
+    Clusters with no stack_name (outside every z/richness/delta_m bin, or
+    a checkpoint predating stack labelling) are left uncorrected — flagged
+    once via a summary count, not per-cluster, to keep the log readable."""
+    from cluster_toolkit.boostfactors import boost_powerlaw_at_R
+
+    if "stack_name" not in cluster_obs.colnames:
+        print("    WARNING: boosts requested but this checkpoint's "
+              "cluster_obs has no 'stack_name' column (predates "
+              "prepare_real_data.py's stack labelling) — no boost "
+              "correction applied to any cluster", flush=True)
+        return data_vectors_fit, cov_matrices_fit
+
+    stack_names = np.asarray(cluster_obs["stack_name"])
+    data_vectors_fit = data_vectors_fit.copy()
+    cov_matrices_fit = cov_matrices_fit.copy()
+
+    n_corrected, n_missing_stack, n_unknown_stack = 0, 0, 0
+    boost_cache = {}
+    for i, name in enumerate(stack_names):
+        if not name:
+            n_missing_stack += 1
+            continue
+        fit = BOOST_FITS.get(name)
+        if fit is None or fit.get("failed"):
+            n_unknown_stack += 1
+            continue
+        boost_vec = boost_cache.get(name)
+        if boost_vec is None:
+            boost_vec = boost_powerlaw_at_R(
+                RADII_fit, fit["B0"], fit["Rs"], fit["alpha"],
+            )
+            boost_cache[name] = boost_vec
+        data_vectors_fit[i] *= boost_vec
+        cov_matrices_fit[i] *= np.outer(boost_vec, boost_vec)
+        n_corrected += 1
+
+    print(f"    boost correction applied: {n_corrected:,} clusters "
+          f"({n_missing_stack:,} no stack, {n_unknown_stack:,} stack not "
+          f"in {BOOSTS_FILE!r})", flush=True)
+    return data_vectors_fit, cov_matrices_fit
+
+
 def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
     """Inference phase for one gamma: read the checkpointed data from
     ``data_subdir``, run N_BOOTSTRAP bootstrap nautilus fits, and combine
@@ -881,8 +993,31 @@ def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
 
     keep             = FIT_RADII >= R_MIN_FIT
     RADII_fit        = FIT_RADII[keep]
-    data_vectors_fit = data_vectors[:, keep]
+    data_vectors_fit = data_vectors[:, keep].copy()
     cov_matrices_fit = cov_matrices[:, keep][:, :, keep]
+
+    if WILD_OUTLIER_MASK:
+        inner = RADII_fit < WILD_OUTLIER_RMAX
+        if inner.any():
+            bad = np.zeros_like(data_vectors_fit, dtype=bool)
+            bad[:, inner] = (
+                (data_vectors_fit[:, inner] <= WILD_OUTLIER_MIN)
+                | (data_vectors_fit[:, inner] >= WILD_OUTLIER_MAX)
+            )
+            n_masked = int(bad.sum())
+            data_vectors_fit[bad] = np.nan
+            print(
+                f"    wild-outlier masking: R<{WILD_OUTLIER_RMAX} Mpc bins "
+                f"restricted to {WILD_OUTLIER_MIN}<DeltaSigma<{WILD_OUTLIER_MAX} "
+                f"-- masked {n_masked:,} additional entries "
+                f"({100*n_masked/bad.size:.1f}% of all entries)",
+                flush=True,
+            )
+
+    if BOOST_FITS is not None:
+        data_vectors_fit, cov_matrices_fit = _apply_boost_correction(
+            cluster_obs, data_vectors_fit, cov_matrices_fit, RADII_fit,
+        )
 
     # ── Bootstrap loop ───────────────────────────────────────────────────────
     load_phase_dur = time.time() - gamma_t0   # wall time for data loading

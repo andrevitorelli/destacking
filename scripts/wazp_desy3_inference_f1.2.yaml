@@ -1,0 +1,68 @@
+# Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
+# prepare_real_data.py (wazp_desy3_real_data_f1.2.yaml) into
+# /home/andre/destacking_data/real_data/wazp_real_data_f1.2/simulation_g00_gamma+0.0/.
+#
+# Same as wazp_desy3_inference.yaml, but fitting the data measured with the
+# more stringent factor=1.2 background-selection margin (see
+# wazp_desy3_real_data_f1.2.yaml), testing the foreground-contamination
+# hypothesis in project memory wazp-desy3-root-cause-hypotheses — the
+# joint-fit counterpart to wazp_stacked_analysis.py's RUN_TAG="_f1.2" run.
+#
+# gamma_true=0.0 here is NOT a truth value — real clusters have no known
+# gamma. It is a pure directory-naming/metadata label (see
+# prepare_real_data.py's module docstring): read off gamma_est/sigma_gamma
+# and ignore every "bias"/"gamma_true_ols" column in the reports, since
+# there is no truth to compare against.
+#
+# 50 bootstraps (up from the 5-10 used in simulation testing) to get a
+# reliable posterior-mixture estimate on real, noisier, non-uniform data.
+# f_mis and sigma_off use flat (uninformative) priors over their full
+# physical range, rather than the gaussian-around-simulated-truth priors
+# used in the simulation tests — there is no truth to centre a gaussian on
+# for real data.  The mass-concentration/mass-richness relation priors are
+# unchanged from hisnr_tri_mis_wide.yaml's widened gaussians.
+#
+# Usage: python gamma_inference.py wazp_desy3_inference_f1.2.yaml
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: false
+inference:  true
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data_f1.2
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0
+n_gamma:     1
+n_workers:   12
+
+n_clusters: 15967   # cosmetic only (report/plot titles) — the actual
+                    # bootstrap draw size follows the loaded data (n_data)
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 50
+timeout:     7200          # ~10.6x more clusters than the sim tests ->
+                           # each likelihood call costs proportionally more
+
+# Inference-only mode requires the fit radial grid explicitly — MUST match
+# the grid prepare_real_data.py measured on (log_inner_radius/log_outer_radius/
+# n_radii in wazp_desy3_real_data_f1.2.yaml).
+fit_log_inner_radius: -0.8
+fit_log_outer_radius:  0.6
+fit_n_radii:           8
+r_min_fit:             0.5
+
+fit_params:
+  # Mass-concentration / mass-richness relations: same widened gaussian
+  # priors as hisnr_tri_mis_wide.yaml (no known truth for real data either,
+  # so keep them broad rather than tightening around an assumed value).
+  c0:           {fit: true, prior: gaussian, loc: 4.5,   scale: 3.0}
+  alpha_cm:     {fit: true, prior: gaussian, loc: -0.1,  scale: 0.9}
+  beta_cm:      {fit: true, prior: gaussian, loc: -0.4,  scale: 1.5}
+  gamma_cm:     {fit: true, prior: gaussian, loc: 0.0,   scale: 10.5}
+  log_M_norm:   {fit: true, prior: gaussian, loc: 0.0,   scale: 0.3}
+  alpha_mr:     {fit: true, prior: gaussian, loc: 1.356, scale: 0.5}
+  beta_mr:      {fit: true, prior: gaussian, loc: -0.30, scale: 0.3}
+  # Miscentering: flat/uninformative over the full physical range, as
+  # requested — no simulated truth to centre a gaussian on for real data.
+  f_mis:        {fit: true, prior: flat, lo: 0.0, hi: 1.0}
+  sigma_off:    {fit: true, prior: flat, lo: 0.0, hi: 1.0}

@@ -1,16 +1,36 @@
 """
-Characterise the simulated triaxial-halo shape distribution.
+REVIEWER VALIDATION SCRIPT — simulated halo-shape distribution check.
 
-For one negative-γ simulation, re-sample the same triaxial shapes that
-gamma_scan.py used (deterministic seed _seed(g_idx, 10)) and plot:
+Characterise the simulated triaxial-halo shape distribution, so a
+reviewer can see exactly what shape/orientation model underlies the
+triaxial-vs-spherical bias discussed in the paper.
+
+For one simulation point in a gamma_inference.py SIMULATION run
+(simulation: true), re-sample the same triaxial shapes that the sim
+pipeline used (deterministic seed _seed(g_idx, 10)) and plot:
   * b/a and c/a marginals
   * the triaxiality parameter T = (a² − b²)/(a² − c²)
-    (T<0.5 oblate-leaning, T>0.5 prolate-leaning)
+    (T<1/3 oblate, 1/3<=T<=2/3 triaxial, T>2/3 prolate)
+  * the joint (b/a, c/a) distribution
   * the projected axis ratio q_min/q_maj on the sky
-  * the line-of-sight direction (theta_los) distribution
 
 Output:
   RUN_DIR/plateau/triaxiality_distribution.png
+
+Usage:
+  python plot_triaxiality_distribution.py RUN_DIR
+  python plot_triaxiality_distribution.py   # uses the latest run in
+                                             # ~/destacking_data/output/
+
+Fixed 2026-07-27: hardcoded a specific dead run directory
+(gamma_scan_outputs/run_2026-05-24T10-19-32) and a specific
+simulation_g00_gamma-1.0 subdirectory that doesn't exist in every run —
+now defaults to the latest run in ~/destacking_data/output/ and picks
+whichever simulation_g* checkpoint sorts first (any one works: the shape
+sampling only depends on g_idx, not gamma_true). Verified against a
+fresh 3-gamma-point smoke-test scan (150 clusters) — figure renders
+correctly, shape statistics match the injected b/a~U(0.5,1),
+c/a~U(0.3,b/a) prior by construction.
 """
 
 import os
@@ -27,10 +47,26 @@ def _seed(g_idx, offset):
     return g_idx * 100_000 + int(offset)
 
 
+def find_latest_run():
+    base = os.path.expanduser("~/destacking_data/output")
+    runs = sorted(
+        (d for d in os.listdir(base) if d.startswith("run_")),
+        key=lambda d: os.path.getmtime(os.path.join(base, d)),
+        reverse=True,
+    )
+    if not runs:
+        raise FileNotFoundError(f"No run directories in {base}/")
+    return os.path.join(base, runs[0])
+
+
 def main():
-    run_dir = sys.argv[1] if len(sys.argv) > 1 \
-              else "gamma_scan_outputs/run_2026-05-24T10-19-32"
-    sim_dir = os.path.join(run_dir, "simulation_g00_gamma-1.0")
+    run_dir = sys.argv[1] if len(sys.argv) > 1 else find_latest_run()
+    sim_dirs = sorted(
+        d for d in os.listdir(run_dir) if d.startswith("simulation_g")
+    )
+    if not sim_dirs:
+        raise FileNotFoundError(f"No simulation_g* checkpoints in {run_dir}")
+    sim_dir = os.path.join(run_dir, sim_dirs[0])
     print(f"Using {sim_dir}")
 
     tc = np.load(os.path.join(sim_dir, "truth_catalog.npz"))
