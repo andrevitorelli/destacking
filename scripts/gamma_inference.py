@@ -99,7 +99,7 @@ Configuration via environment variables
                 budget cuts the sampler off mid-run and produces collapsed
                 (near-zero-width) posteriors.
   RUN_DIR       Output directory                (default
-                gamma_scan_outputs/run_YYYY-MM-DDTHH-MM-SS)
+                ~/destacking_data/output/run_YYYY-MM-DDTHH-MM-SS)
                 Set to an existing path to resume a previous run.
 """
 
@@ -516,7 +516,7 @@ TIMEOUT = int(_cfg("timeout", "TIMEOUT", 600, cast=int))
 _DEFAULT_RUN_TS = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 RUN_DIR = os.environ.get(
     "RUN_DIR",
-    os.path.join("gamma_scan_outputs", f"run_{_DEFAULT_RUN_TS}"),
+    os.path.join(os.path.expanduser("~/destacking_data/output"), f"run_{_DEFAULT_RUN_TS}"),
 )
 # RUN_DIR is only a path here; it is created (and the config copied into
 # it) inside main(), so importing this module for analysis leaves no
@@ -565,10 +565,7 @@ def simulate_lensing(truth, shapes, mis, g_idx):
 
 # ── Notebook-compatible per-gamma sim data ────────────────────────────────────
 
-_NOTEBOOK_DATA_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'notebooks', 'data',
-)
+_NOTEBOOK_DATA_DIR = os.path.expanduser("~/destacking_data/sims")
 
 
 def _write_notebook_compat_sim(g_idx, gamma_true, truth, cluster_obs, bgs):

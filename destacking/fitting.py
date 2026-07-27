@@ -2,6 +2,7 @@ import numpy as np
 
 from destacking.model import (
     forward_model, forward_model_mc, forward_model_combined,
+    forward_model_diemer,
     _MC_M_PIVOT_LOG, _MC_Z_REF, _MC_DM_REF,
 )
 
@@ -680,6 +681,211 @@ def run_sampler_combined(
                     # isolated low-weight tail sample can otherwise
                     # underflow to log(0) = -inf, which combined with its
                     # (near-)zero weight in the sum is a 0 * -inf -> NaN.
+                    pdf_q = gaussian_kde(x, weights=_wf).pdf(x)
+                    log_q = np.log(np.clip(pdf_q, 1e-300, None))
+                    log_p = priors[name].logpdf(x)
+                    marginal_kl[name] = float(np.sum(_wf * (log_q - log_p)))
+                except Exception:
+                    marginal_kl[name] = float("nan")
+            sampler.marginal_kl_nats = marginal_kl
+            _finite_marg = [v for v in marginal_kl.values() if np.isfinite(v)]
+            sampler.kl_residual_nats = (
+                float(sampler.kl_nats - sum(_finite_marg))
+                if np.isfinite(sampler.kl_nats)
+                and len(_finite_marg) == len(marginal_kl)
+                else float("nan")
+            )
+        else:
+            sampler.kl_nats = float("nan")
+            sampler.marginal_kl_nats = {n: float("nan") for n in param_order}
+            sampler.kl_residual_nats = float("nan")
+    except Exception:
+        sampler.kl_nats = float("nan")
+        sampler.marginal_kl_nats = {n: float("nan") for n in param_order}
+        sampler.kl_residual_nats = float("nan")
+    return sampler
+
+
+# ---------------------------------------------------------------------------
+# Diemer & Joyce (2019) M-c relation: likelihood and sampler
+# ---------------------------------------------------------------------------
+
+def log_likelihood_diemer(
+    gamma,
+    cluster_table,
+    data_vectors,
+    cov_matrices,
+    radii,
+    delta_m_ref=_MC_DM_REF,
+    log_M_norm=0.0,
+    alpha_mr=1.356,
+    beta_mr=-0.30,
+    A=1.0,
+    FMISS=None,
+    SIGMA_OFF=None,
+    BCG_B_MASS=None,
+):
+    """
+    Log-likelihood for the Diemer & Joyce (2019) M-c relation model
+    (``forward_model_diemer``) -- gamma is the magnitude-gap slope applied
+    on top of the theoretical c200m(M, z) prediction, the only
+    concentration-related free parameter in this model (no
+    c0/alpha_cm/beta_cm).
+
+    Returns -inf for unphysical A, for NaN/inf in the forward model
+    (including a cluster whose mass falls outside the Diemer19
+    interpolation grid), or if the forward model raises. Never returns NaN.
+    """
+    if A <= 0:
+        return -np.inf
+    try:
+        model = forward_model_diemer(
+            gamma, cluster_table, radii,
+            delta_m_ref=delta_m_ref,
+            log_M_norm=log_M_norm, alpha_mr=alpha_mr, beta_mr=beta_mr, A=A,
+            FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
+        )
+        if not np.all(np.isfinite(model)):
+            return -np.inf
+        residuals = data_vectors - model
+        ll = cholog_gaussian(residuals, cov_matrices)
+        return ll if np.isfinite(ll) else -np.inf
+    except Exception:
+        return -np.inf
+
+
+# Every parameter this model exposes. 'gamma' has no default (always
+# required, sampled or fixed); the rest soft-default to the same values as
+# _COMBINED_PARAM_SOFT_DEFAULTS for consistency with forward_model_combined.
+_DIEMER_PARAMS = ('gamma', 'log_M_norm', 'alpha_mr', 'beta_mr', 'A')
+_DIEMER_PARAM_SOFT_DEFAULTS = {
+    'log_M_norm': 0.0, 'A': 1.0, 'alpha_mr': 1.356, 'beta_mr': -0.30,
+}
+
+
+def run_sampler_diemer(
+    cluster_table,
+    data_vectors,
+    cov_matrices,
+    radii,
+    priors=None,
+    fixed=None,
+    delta_m_ref=_MC_DM_REF,
+    FMISS=None,
+    SIGMA_OFF=None,
+    BCG_B_MASS=None,
+    n_live=400,
+    pool=None,
+    verbose=True,
+    filepath=None,
+    resume=True,
+    timeout=600,
+):
+    """
+    Run the nautilus nested sampler for the Diemer & Joyce (2019) M-c
+    relation model. Mirrors ``run_sampler_combined``'s priors/fixed
+    interface exactly (see its docstring), restricted to this model's
+    smaller parameter set: 'gamma' (always required, sampled or fixed --
+    the magnitude-gap slope on top of the Diemer19 baseline, same role as
+    ``gamma_cm`` in the combined model), 'log_M_norm'/'alpha_mr'/
+    'beta_mr'/'A' (soft-defaulted), and optional 'f_mis'/'sigma_off'
+    (population-level miscentering, sampled or fixed together, else
+    falling back to the FMISS/SIGMA_OFF array kwargs).
+
+    Parameter order in ``sampler.posterior()``/``sampler.param_order`` is
+    ``_DIEMER_PARAMS`` order (gamma, log_M_norm, alpha_mr, beta_mr, A),
+    filtered to whichever are actually sampled, with f_mis/sigma_off
+    appended last if sampled.
+
+    Returns
+    -------
+    sampler : nautilus.Sampler
+        Completed sampler, with the same ``.converged``/``.param_order``/
+        ``.kl_nats``/``.marginal_kl_nats``/``.kl_residual_nats``
+        attributes ``run_sampler_combined`` attaches.
+    """
+    from nautilus import Prior, Sampler
+
+    priors = dict(priors) if priors is not None else {}
+    fixed  = dict(fixed) if fixed is not None else {}
+
+    if 'gamma' not in priors and 'gamma' not in fixed:
+        raise KeyError(
+            "'gamma' needs either a prior (to sample) or a fixed value"
+        )
+    for name, default in _DIEMER_PARAM_SOFT_DEFAULTS.items():
+        if name not in priors and name not in fixed:
+            fixed[name] = default
+
+    sample_mis_prior = ('f_mis' in priors) or ('sigma_off' in priors)
+    if sample_mis_prior and not ('f_mis' in priors and 'sigma_off' in priors):
+        raise KeyError("sampling miscentering requires both 'f_mis' and "
+                       "'sigma_off' priors")
+    fixed_mis = ('f_mis' in fixed) or ('sigma_off' in fixed)
+    if fixed_mis and not ('f_mis' in fixed and 'sigma_off' in fixed):
+        raise KeyError("fixing miscentering requires both 'f_mis' and "
+                       "'sigma_off' values")
+
+    nprior = Prior()
+    for name in _DIEMER_PARAMS:
+        if name in priors:
+            nprior.add_parameter(name, dist=priors[name])
+    if sample_mis_prior:
+        nprior.add_parameter('f_mis',     dist=priors['f_mis'])
+        nprior.add_parameter('sigma_off', dist=priors['sigma_off'])
+    param_order = list(nprior.keys)
+
+    n_cl = len(data_vectors)
+
+    def _val(p, name):
+        return p[name] if name in p else fixed[name]
+
+    def _loglike(p):
+        if 'f_mis' in p:
+            fmiss_arr = np.full(n_cl, p['f_mis'])
+            soff_arr  = np.full(n_cl, p['sigma_off'])
+        elif fixed_mis:
+            fmiss_arr = np.full(n_cl, fixed['f_mis'])
+            soff_arr  = np.full(n_cl, fixed['sigma_off'])
+        else:
+            fmiss_arr = FMISS
+            soff_arr  = SIGMA_OFF
+        return log_likelihood_diemer(
+            _val(p, 'gamma'),
+            cluster_table, data_vectors, cov_matrices, radii,
+            delta_m_ref=delta_m_ref,
+            log_M_norm=_val(p, 'log_M_norm'),
+            alpha_mr=_val(p, 'alpha_mr'),
+            beta_mr=_val(p, 'beta_mr'),
+            A=_val(p, 'A'),
+            FMISS=fmiss_arr,
+            SIGMA_OFF=soff_arr,
+            BCG_B_MASS=BCG_B_MASS,
+        )
+
+    sampler = Sampler(
+        nprior, _loglike,
+        n_live=n_live, pool=pool,
+        filepath=filepath, resume=resume,
+    )
+    converged = sampler.run(verbose=verbose, timeout=timeout)
+    sampler.converged   = bool(converged)
+    sampler.param_order = param_order
+    try:
+        _points, _log_w, _log_l = sampler.posterior()
+        _w = np.exp(_log_w - _log_w.max())
+        _w = _w / _w.sum()
+        _finite = np.isfinite(_log_l)
+        if _finite.any():
+            sampler.kl_nats = float(
+                np.sum(_w[_finite] * _log_l[_finite]) - sampler.log_z
+            )
+            _wf = _w[_finite]
+            _wf = _wf / _wf.sum()
+            marginal_kl = {}
+            for i, name in enumerate(param_order):
+                try:
+                    x = _points[_finite, i]
                     pdf_q = gaussian_kde(x, weights=_wf).pdf(x)
                     log_q = np.log(np.clip(pdf_q, 1e-300, None))
                     log_p = priors[name].logpdf(x)

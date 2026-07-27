@@ -1,0 +1,31 @@
+# Smoke test for gamma_inference_diemer.py: quick sanity check (short
+# timeout, single bootstrap, minimal fit_params) against the existing
+# real WaZP+DES-Y3 checkpoint, NOT a production run.
+#
+# Usage: python gamma_inference_diemer.py gamma_inference_diemer_smoketest.yaml
+
+simulation: false
+inference:  true
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data_floor6
+
+gamma_range: [0.0, 0.0]
+n_gamma:     1
+n_workers:   12
+n_clusters:  15967
+
+bootstrap:   true
+n_bootstrap: 1
+timeout:     600
+
+fit_log_inner_radius: -0.6
+fit_log_outer_radius:  0.6
+fit_n_radii:           6
+r_min_fit:             0.0
+
+fit_params:
+  gamma:        {fit: true, prior: gaussian, loc: 0.0, scale: 0.3}
+  log_M_norm:   {fit: true, prior: gaussian, loc: 0.0, scale: 0.3}
+  alpha_mr:     {fit: false, value: 1.356}
+  beta_mr:      {fit: false, value: -0.30}
+  f_mis:        {fit: false, value: 0.36}
+  sigma_off:    {fit: false, value: 0.1}
