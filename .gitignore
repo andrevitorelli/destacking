@@ -9,3 +9,4 @@
 !*.yml
 scripts/gamma_scan_outputs/
 !docs/*.tex
+!claude/*.tar.gz
