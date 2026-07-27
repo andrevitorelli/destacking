@@ -5,7 +5,7 @@
 # selection margin (factor=1.2 instead of 1.1), testing the foreground-
 # contamination hypothesis in project memory
 # wazp-desy3-root-cause-hypotheses. out_dir is a separate directory so the
-# factor=1.1 baseline checkpoint (gamma_scan_outputs/wazp_real_data) stays
+# factor=1.1 baseline checkpoint (/home/andre/destacking_data/real_data/wazp_real_data) stays
 # intact for comparison.
 #
 # Usage: python prepare_real_data.py wazp_desy3_real_data_f1.2.yaml
@@ -13,7 +13,7 @@
 # ═══ Cluster catalogue ═══════════════════════════════════════════════════
 # Compact catalogue and filtered source cache already built (factor does
 # not affect either), reused as-is.
-cluster_catalog_file: data/wazp_real_data.fits
+cluster_catalog_file: /home/andre/destacking_data/real_data/wazp_real_data.fits
 clusters_file: /mnt/c/Users/andre/DATA/y6a2_dnf_wazp_v5.0.12.6801_clusters.fits
 members_file:  /mnt/c/Users/andre/DATA/y6a2_dnf_wazp_v5.0.12.6801_members.fits
 
@@ -28,7 +28,7 @@ delta_m_min: 0.0
 metacal_file: /mnt/c/Users/andre/DATA/DESY3_metacal_v03-004.h5
 dnf_file:     /mnt/c/Users/andre/DATA/DESY3_GOLD_2_2.1_DNF.h5
 
-filtered_cache: data/metacal_filtered.npz
+filtered_cache: /home/andre/destacking_data/real_data/metacal_filtered.npz
 chunk_read: 10000000
 
 # ═══ Measurement ═══════════════════════════════════════════════════════════
@@ -57,6 +57,6 @@ checkpoint_every: 1000
 use_cache: true
 
 # ═══ Output ══════════════════════════════════════════════════════════════
-out_dir: gamma_scan_outputs/wazp_real_data_f1.2
+out_dir: /home/andre/destacking_data/real_data/wazp_real_data_f1.2
 g_idx: 0
 gamma_true: 0.0

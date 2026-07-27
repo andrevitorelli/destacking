@@ -1,6 +1,6 @@
 # Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
 # prepare_real_data.py (wazp_desy3_real_data.yaml) into
-# gamma_scan_outputs/wazp_real_data/simulation_g00_gamma+0.0/.
+# /home/andre/destacking_data/real_data/wazp_real_data/simulation_g00_gamma+0.0/.
 #
 # Boost-corrected variant of wazp_desy3_inference.yaml: instead of an
 # informative prior nudging alpha_cm negative (that config's stopgap —
@@ -35,13 +35,13 @@
 # ═══ Run phases ═══════════════════════════════════════════════════════════
 simulation: false
 inference:  true
-data_folder: gamma_scan_outputs/wazp_real_data
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data
 
 # Per-cluster boost correction — see wazp_stacked_analysis.py's Stage 2b
 # and gamma_inference.py's `boosts:` handling (_apply_boost_correction).
 # Requires the checkpoint's cluster_obs to have a stack_name column
 # (regenerated via prepare_real_data.py after this feature was added).
-boosts: data/wazp_boost_fits.pkl
+boosts: /home/andre/destacking_data/real_data/wazp_boost_fits.pkl
 
 # ═══ Scan (shared) ════════════════════════════════════════════════════════
 gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0

@@ -1,6 +1,6 @@
 # Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
 # prepare_real_data.py (wazp_desy3_real_data_f1.2.yaml) into
-# gamma_scan_outputs/wazp_real_data_f1.2/simulation_g00_gamma+0.0/.
+# /home/andre/destacking_data/real_data/wazp_real_data_f1.2/simulation_g00_gamma+0.0/.
 #
 # Same as wazp_desy3_inference.yaml, but fitting the data measured with the
 # more stringent factor=1.2 background-selection margin (see
@@ -27,7 +27,7 @@
 # ═══ Run phases ═══════════════════════════════════════════════════════════
 simulation: false
 inference:  true
-data_folder: gamma_scan_outputs/wazp_real_data_f1.2
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data_f1.2
 
 # ═══ Scan (shared) ════════════════════════════════════════════════════════
 gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0

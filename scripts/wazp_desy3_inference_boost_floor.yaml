@@ -1,6 +1,6 @@
 # Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
 # prepare_real_data.py (wazp_desy3_real_data_floor.yaml) into
-# gamma_scan_outputs/wazp_real_data_floor/simulation_g00_gamma+0.0/.
+# /home/andre/destacking_data/real_data/wazp_real_data_floor/simulation_g00_gamma+0.0/.
 #
 # Variant of wazp_desy3_inference_boost.yaml testing r_min_fit=0 on the
 # FIXED checkpoint: the previous r_min_fit=0 attempt (wild_outlier_mask,
@@ -31,14 +31,14 @@
 # ═══ Run phases ═══════════════════════════════════════════════════════════
 simulation: false
 inference:  true
-data_folder: gamma_scan_outputs/wazp_real_data_floor
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data_floor
 
 # Per-cluster boost correction — see wazp_stacked_analysis.py's Stage 2b
 # and gamma_inference.py's `boosts:` handling (_apply_boost_correction).
 # Unaffected by the floor fix (fit on independently-measured STACKED
 # profiles, not the per-cluster checkpoint), so the existing fits are
 # still valid — no need to rerun Stage 2b.
-boosts: data/wazp_boost_fits.pkl
+boosts: /home/andre/destacking_data/real_data/wazp_boost_fits.pkl
 
 # ═══ Scan (shared) ════════════════════════════════════════════════════════
 gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0

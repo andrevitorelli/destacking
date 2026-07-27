@@ -13,11 +13,12 @@ group and compare them — the stacking methodology and bin definitions are
 carried over directly from notebooks/wazp_mass_richness_by_delta_m.ipynb
 (SIMS=False branch), which is the "guide" for this script.
 
-Inputs (already built by prepare_real_data.py, reused as-is):
-  data/wazp_real_data.fits    compact WaZP cluster catalogue (ID, RA, DEC,
-                               NGALS, ZPHOT, DELTA_M_I, DELTA_M_I_ERR)
-  data/metacal_filtered.npz   pre-filtered DES-Y3 metacal+DNF source
-                               catalogue (ra, dec, z, e1, e2, w, R11..R22)
+Inputs (already built by prepare_real_data.py, reused as-is; real data lives
+under ~/destacking_data/real_data/, see REAL_DATA_DIR below):
+  wazp_real_data.fits    compact WaZP cluster catalogue (ID, RA, DEC,
+                          NGALS, ZPHOT, DELTA_M_I, DELTA_M_I_ERR)
+  metacal_filtered.npz   pre-filtered DES-Y3 metacal+DNF source
+                          catalogue (ra, dec, z, e1, e2, w, R11..R22)
 
 Pipeline (6 stages, each checkpointed under data/wazp_stacked_*.pkl /
 data/wazp_boost_fits.pkl and gated by USE_CACHE so a re-run picks up where
@@ -80,24 +81,28 @@ from cluster_toolkit.boostfactors import boost_powerlaw_at_R
 from scipy.optimize import curve_fit
 
 # ── Config ────────────────────────────────────────────────────────────────
-WAZP_CATALOG = "data/wazp_real_data.fits"
-FILTERED_NPZ = "data/metacal_filtered.npz"
+# Real WaZP+DES-Y3 data and outputs (including the boost fits below) live
+# outside the repo -- moved 2026-07-27, see project memory
+# sim-data-relocated / real-data-relocated.
+REAL_DATA_DIR = os.path.expanduser("~/destacking_data/real_data")
+
+WAZP_CATALOG = f"{REAL_DATA_DIR}/wazp_real_data.fits"
+FILTERED_NPZ = f"{REAL_DATA_DIR}/metacal_filtered.npz"
 
 # Output file tag: distinguishes cache/output files between background-
 # selection strategies/parameters so different runs can be compared side
 # by side instead of clobbering each other. "" reproduces the original
 # (factor=1.1, the xlensing-default-matching baseline) filenames — back to
-# baseline: the boost fit needs to match gamma_scan_outputs/wazp_real_data
-# (factor=1.1), which is what the current joint fit (wazp_desy3_inference.yaml)
-# reads.
+# baseline: the boost fit needs to match wazp_real_data (factor=1.1), which
+# is what the current joint fit (wazp_desy3_inference.yaml) reads.
 RUN_TAG = ""
 
-BKG_CACHE  = f"data/wazp_stacked_bkgs{RUN_TAG}.pkl"
-STACKS_PKL = f"data/wazp_stacked_stacks{RUN_TAG}.pkl"
-FITS_PKL   = f"data/wazp_stacked_fits{RUN_TAG}.pkl"
-ML_PKL     = f"data/wazp_stacked_ml_fits{RUN_TAG}.pkl"
-CMR_PKL    = f"data/wazp_stacked_cmr_fits{RUN_TAG}.pkl"
-BOOST_PKL  = f"data/wazp_boost_fits{RUN_TAG}.pkl"
+BKG_CACHE  = f"{REAL_DATA_DIR}/wazp_stacked_bkgs{RUN_TAG}.pkl"
+STACKS_PKL = f"{REAL_DATA_DIR}/wazp_stacked_stacks{RUN_TAG}.pkl"
+FITS_PKL   = f"{REAL_DATA_DIR}/wazp_stacked_fits{RUN_TAG}.pkl"
+ML_PKL     = f"{REAL_DATA_DIR}/wazp_stacked_ml_fits{RUN_TAG}.pkl"
+CMR_PKL    = f"{REAL_DATA_DIR}/wazp_stacked_cmr_fits{RUN_TAG}.pkl"
+BOOST_PKL  = f"{REAL_DATA_DIR}/wazp_boost_fits{RUN_TAG}.pkl"
 
 USE_CACHE  = True     # set False to force a clean rebuild of every stage
 RADIUS_MPC = 5.0

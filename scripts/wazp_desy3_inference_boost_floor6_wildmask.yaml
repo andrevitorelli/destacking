@@ -1,6 +1,6 @@
 # Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
 # prepare_real_data.py (wazp_desy3_real_data_floor6.yaml) into
-# gamma_scan_outputs/wazp_real_data_floor6/simulation_g00_gamma+0.0/.
+# /home/andre/destacking_data/real_data/wazp_real_data_floor6/simulation_g00_gamma+0.0/.
 #
 # Sanity-check variant of wazp_desy3_inference_boost_floor6.yaml: same
 # checkpoint, boost correction, r_min_fit=0, and priors, but with
@@ -19,9 +19,9 @@
 # ═══ Run phases ═══════════════════════════════════════════════════════════
 simulation: false
 inference:  true
-data_folder: gamma_scan_outputs/wazp_real_data_floor6
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data_floor6
 
-boosts: data/wazp_boost_fits.pkl
+boosts: /home/andre/destacking_data/real_data/wazp_boost_fits.pkl
 
 # ═══ Scan (shared) ════════════════════════════════════════════════════════
 gamma_range: [0.0, 0.0]

@@ -265,7 +265,8 @@ def build_source_prefilter(cfg):
     """
     import h5py
 
-    cache      = _cfg(cfg, "filtered_cache", "data/metacal_filtered.npz")
+    cache      = _cfg(cfg, "filtered_cache",
+                      os.path.expanduser("~/destacking_data/real_data/metacal_filtered.npz"))
     use_cache  = _cfg(cfg, "use_cache", True)
     metacal_f  = _cfg(cfg, "metacal_file", None, required=True)
     dnf_f      = _cfg(cfg, "dnf_file", None, required=True)

@@ -1,6 +1,6 @@
 # Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
 # prepare_real_data.py (wazp_desy3_real_data.yaml) into
-# gamma_scan_outputs/wazp_real_data/simulation_g00_gamma+0.0/.
+# /home/andre/destacking_data/real_data/wazp_real_data/simulation_g00_gamma+0.0/.
 #
 # gamma_true=0.0 here is NOT a truth value — real clusters have no known
 # gamma. It is a pure directory-naming/metadata label (see
@@ -21,7 +21,7 @@
 # ═══ Run phases ═══════════════════════════════════════════════════════════
 simulation: false
 inference:  true
-data_folder: gamma_scan_outputs/wazp_real_data
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data
 
 # ═══ Scan (shared) ════════════════════════════════════════════════════════
 gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0
