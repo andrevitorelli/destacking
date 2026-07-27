@@ -405,6 +405,7 @@ def forward_model_diemer(
     gamma,
     cluster_table,
     radii,
+    delta_m_ref=_MC_DM_REF,
     log_M_norm=0.0,
     alpha_mr=1.356,
     beta_mr=-0.30,
@@ -415,37 +416,43 @@ def forward_model_diemer(
 ):
     """
     Predict NFW ΔΣ profiles using the Diemer & Joyce (2019) mass-
-    concentration relation as-is (mass and redshift dependence both taken
-    directly from the theoretical model, not fit), with a single free
-    log-offset ``gamma`` as the only concentration-related parameter:
+    concentration relation as the baseline (mass and redshift dependence
+    both taken directly from the theoretical model, not fit), with a
+    single free magnitude-gap slope ``gamma`` as the only concentration-
+    related parameter:
 
         log10(M) = log10(M0) + alpha_mr * (log10(Lambda) − log10(Lambda0))
                               + beta_mr  * (log10(z) − log10(z0))
                               + log_M_norm
 
-        log10(c) = log10(c_Diemer19(M200m, z)) + gamma
+        log10(c) = log10(c_Diemer19(M200m, z))
+                 + gamma * log10(Δm / delta_m_ref)
 
-    Unlike ``forward_model_combined``, there is no separate mass slope,
-    redshift slope, or magnitude-gap term for concentration -- Diemer19
-    already encodes the mass and redshift dependence (including its
-    non-power-law curvature, see project report
-    reports/2026-07-26_boost_factors_variance_floor_alpha_cm.tex), so this
-    model tests whether the data are consistent with that predicted shape
-    up to one overall calibration factor, rather than fitting the shape
-    itself. ``gamma=0`` reproduces the literature prediction exactly;
-    ``gamma`` is d(log10 c) / d(1), i.e. a flat multiplicative shift
-    (10**gamma) applied to c_Diemer19 at every mass and redshift.
+    Unlike ``forward_model_combined``, there is no separate mass slope or
+    redshift slope for concentration -- Diemer19 already encodes the mass
+    and redshift dependence (including its non-power-law curvature, see
+    project report
+    reports/2026-07-26_boost_factors_variance_floor_alpha_cm.tex) -- but
+    ``gamma`` plays the same role ``gamma_cm`` does in
+    ``forward_model_combined``: the magnitude-gap slope,
+    d log10(c) / d log10(Δm/Δm_ref), layered on top of the Diemer19
+    baseline instead of a free power-law one. ``gamma=0`` reproduces the
+    literature prediction exactly, independent of Δm. Clusters without a
+    detected satellite (delta_m = NaN) receive no gamma correction
+    (log10 ratio = 0), same convention as ``forward_model_combined``.
 
     Parameters
     ----------
     gamma : float
-        Log10 offset applied to the Diemer & Joyce (2019) c200m
-        prediction: c = c_Diemer19(M200m, z) * 10**gamma.
+        Mass-concentration relation: magnitude-gap slope
+        d log10(c) / d log10(Δm/Δm_ref), applied on top of the Diemer19
+        c200m(M200m, z) baseline.
     cluster_table : astropy.table.Table
-        Must have columns 'z' and 'Lambda'. 'delta_m' is not used --
-        there is no magnitude-gap term in this model.
+        Must have columns 'z', 'Lambda', and 'delta_m'.
     radii : array (M,)
         Projected radii in Mpc.
+    delta_m_ref : float
+        Reference magnitude gap [mag]. Default 1.0.
     log_M_norm, alpha_mr, beta_mr : float
         Mass-richness relation parameters, same meaning as in
         ``forward_model_combined``.
@@ -462,12 +469,18 @@ def forward_model_diemer(
     """
     z      = np.asarray(cluster_table['z'])
     Lambda = np.asarray(cluster_table['Lambda'])
+    dm     = np.asarray(cluster_table['delta_m'], dtype=float)
 
     logM  = mass_lambda_McClintock18(Lambda, z, Flambda=alpha_mr,
                                      Gz=beta_mr) + log_M_norm
     M200m = 10.0 ** logM
 
-    C200m = diemer19_c200m(M200m, z) * (10.0 ** gamma)
+    dm_eff   = np.where(np.isfinite(dm), dm, delta_m_ref)
+    dm_eff   = np.maximum(dm_eff, 1e-6)   # avoid log10(0)
+    log_dm_r = np.log10(dm_eff / delta_m_ref)
+
+    logC  = np.log10(diemer19_c200m(M200m, z)) + gamma * log_dm_r
+    C200m = 10.0 ** logC
 
     return A * _nfw_profiles(
         z, M200m, C200m, radii,

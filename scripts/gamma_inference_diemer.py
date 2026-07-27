@@ -5,18 +5,22 @@ Gamma inference with separated simulation and inference phases -- Diemer
 Identical to gamma_inference.py in every respect (phases, resumability,
 YAML config, bootstrap/combination logic) EXCEPT the mass-concentration
 relation: instead of the free power-law c0/alpha_cm/beta_cm/gamma_cm
-model, concentration is set directly by the Diemer & Joyce (2019) c200m(M,
-z) relation (destacking.model.diemer19_c200m / forward_model_diemer), and
-the ONLY concentration-related free parameter is 'gamma', a single log10
-offset applied to that theoretical prediction: c = c_Diemer19(M200m, z) *
-10**gamma. gamma=0 reproduces the literature prediction exactly. See
-destacking/model.py's forward_model_diemer docstring and project report
-reports/2026-07-26_boost_factors_variance_floor_alpha_cm.tex (Section 5)
-for the physical motivation and the mass-definition consistency check
-(M200m throughout, matching xlensing.model.NFW_Delta_Sigma -- Diemer19 is
-natively 200c in colossus, so diemer19_c200m interpolates a precomputed
-M200m grid rather than calling colossus with mdef='200m' directly, which
-has a vectorized-redshift bug).
+model, mass and redshift dependence come directly from the Diemer & Joyce
+(2019) c200m(M, z) relation (destacking.model.diemer19_c200m /
+forward_model_diemer), and the ONLY concentration-related free parameter
+is 'gamma' -- the magnitude-gap slope, playing the same role gamma_cm
+does in the combined model, layered on top of the Diemer19 baseline:
+
+    log10(c) = log10(c_Diemer19(M200m, z)) + gamma * log10(Δm/Δm_ref)
+
+gamma=0 reproduces the literature prediction exactly, independent of Δm.
+See destacking/model.py's forward_model_diemer docstring and project
+report reports/2026-07-26_boost_factors_variance_floor_alpha_cm.tex
+(Section 5) for the physical motivation and the mass-definition
+consistency check (M200m throughout, matching xlensing.model.
+NFW_Delta_Sigma -- Diemer19 is natively 200c in colossus, so
+diemer19_c200m interpolates a precomputed M200m grid rather than calling
+colossus with mdef='200m' directly, which has a vectorized-redshift bug).
 
 Does exactly what gamma_scan.py does, but the per-gamma work is split into
 two independently toggleable phases:
@@ -362,9 +366,10 @@ N_BINS     = len(SIM_RADII)
 #     sigma_off:    {fit: true,  prior: flat, lo: 0.05, hi: 1.5}
 #
 # 'gamma' is the sole concentration-related parameter in this variant (see
-# the module docstring): a single log10 offset on the Diemer & Joyce (2019)
-# c200m(M, z) prediction, replacing the c0/alpha_cm/beta_cm/gamma_cm
-# power-law relation gamma_inference.py fits. '_mr' parameters (alpha_mr,
+# the module docstring): the magnitude-gap slope layered on top of the
+# Diemer & Joyce (2019) c200m(M, z) prediction, replacing the
+# c0/alpha_cm/beta_cm/gamma_cm power-law relation gamma_inference.py fits
+# (gamma plays the same role gamma_cm does there). '_mr' parameters (alpha_mr,
 # beta_mr) belong to the mass-richness relation, same meaning as in
 # gamma_inference.py.
 #
@@ -663,7 +668,7 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
     # sample-or-fixed mechanism as every other parameter.
     sampler = run_sampler_diemer(
         cluster_obs_boot, data_vectors_fit_boot, cov_matrices_fit_boot, RADII_fit,
-        priors=PRIORS, fixed=FIXED_PARAMS,
+        priors=PRIORS, fixed=FIXED_PARAMS, delta_m_ref=DELTA_M_REF,
         n_live=N_LIVE, pool=N_WORKERS,
         verbose=True, filepath=checkpoint, resume=True, timeout=TIMEOUT,
     )

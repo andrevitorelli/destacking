@@ -716,6 +716,7 @@ def log_likelihood_diemer(
     data_vectors,
     cov_matrices,
     radii,
+    delta_m_ref=_MC_DM_REF,
     log_M_norm=0.0,
     alpha_mr=1.356,
     beta_mr=-0.30,
@@ -726,9 +727,10 @@ def log_likelihood_diemer(
 ):
     """
     Log-likelihood for the Diemer & Joyce (2019) M-c relation model
-    (``forward_model_diemer``) -- gamma is a single log-offset applied to
-    the theoretical c200m(M, z) prediction, the only concentration-related
-    free parameter in this model (no c0/alpha_cm/beta_cm/gamma_cm).
+    (``forward_model_diemer``) -- gamma is the magnitude-gap slope applied
+    on top of the theoretical c200m(M, z) prediction, the only
+    concentration-related free parameter in this model (no
+    c0/alpha_cm/beta_cm).
 
     Returns -inf for unphysical A, for NaN/inf in the forward model
     (including a cluster whose mass falls outside the Diemer19
@@ -739,6 +741,7 @@ def log_likelihood_diemer(
     try:
         model = forward_model_diemer(
             gamma, cluster_table, radii,
+            delta_m_ref=delta_m_ref,
             log_M_norm=log_M_norm, alpha_mr=alpha_mr, beta_mr=beta_mr, A=A,
             FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
         )
@@ -767,6 +770,7 @@ def run_sampler_diemer(
     radii,
     priors=None,
     fixed=None,
+    delta_m_ref=_MC_DM_REF,
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
@@ -781,10 +785,12 @@ def run_sampler_diemer(
     Run the nautilus nested sampler for the Diemer & Joyce (2019) M-c
     relation model. Mirrors ``run_sampler_combined``'s priors/fixed
     interface exactly (see its docstring), restricted to this model's
-    smaller parameter set: 'gamma' (always required, sampled or fixed),
-    'log_M_norm'/'alpha_mr'/'beta_mr'/'A' (soft-defaulted), and optional
-    'f_mis'/'sigma_off' (population-level miscentering, sampled or fixed
-    together, else falling back to the FMISS/SIGMA_OFF array kwargs).
+    smaller parameter set: 'gamma' (always required, sampled or fixed --
+    the magnitude-gap slope on top of the Diemer19 baseline, same role as
+    ``gamma_cm`` in the combined model), 'log_M_norm'/'alpha_mr'/
+    'beta_mr'/'A' (soft-defaulted), and optional 'f_mis'/'sigma_off'
+    (population-level miscentering, sampled or fixed together, else
+    falling back to the FMISS/SIGMA_OFF array kwargs).
 
     Parameter order in ``sampler.posterior()``/``sampler.param_order`` is
     ``_DIEMER_PARAMS`` order (gamma, log_M_norm, alpha_mr, beta_mr, A),
@@ -847,6 +853,7 @@ def run_sampler_diemer(
         return log_likelihood_diemer(
             _val(p, 'gamma'),
             cluster_table, data_vectors, cov_matrices, radii,
+            delta_m_ref=delta_m_ref,
             log_M_norm=_val(p, 'log_M_norm'),
             alpha_mr=_val(p, 'alpha_mr'),
             beta_mr=_val(p, 'beta_mr'),
