@@ -24,5 +24,5 @@ include = ["destacking*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "slow: full end-to-end tests that run the nautilus sampler (run with -m slow)",
+    "slow: full end-to-end tests that run the nautilus sampler or a real multiprocess simulation pipeline (run with -m slow)",
 ]
