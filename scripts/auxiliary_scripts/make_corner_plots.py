@@ -13,7 +13,7 @@ For each ``simulation_g*/bootstrap_*/nautilus_checkpoint.hdf5`` we:
 Skips fits that already have a corner.png on disk.
 
 Usage:
-    python scripts/make_corner_plots.py RUN_DIR [RUN_DIR ...]
+    python scripts/auxiliary_scripts/make_corner_plots.py RUN_DIR [RUN_DIR ...]
 """
 
 from __future__ import annotations

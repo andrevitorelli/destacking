@@ -44,7 +44,7 @@ offset=0.2) reproduces the old hardcoded xlensing behaviour exactly.
 
 Usage
 -----
-    python prepare_real_data.py my_real_data_config.yaml
+    python scripts/auxiliary_scripts/prepare_real_data.py my_real_data_config.yaml
 
 See real_data_config_example.yaml for every key and its default.
 

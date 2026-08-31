@@ -57,7 +57,7 @@ it left off):
                 bootstrap-regression method (propagates the log_M/C
                 posterior correlation within each stack).
 
-Usage: python wazp_stacked_analysis.py
+Usage: python scripts/auxiliary_scripts/wazp_stacked_analysis.py
 Then: notebooks/wazp_stacked_plots.ipynb regenerates every plot from the
 saved pickles alone, with no recomputation.
 """
