@@ -1,0 +1,84 @@
+# Performance-test config: LSST-like conditions, single gamma value.
+#
+# Purpose: measure real wall-clock throughput of a full simulation+inference
+# run at LSST-like scale (not a science run — gamma_range is a single point,
+# gamma_true=0.0, i.e. no injected shear-calibration bias). This is the
+# production-target regime per project memory (lsst-production-plan):
+# DES-density is information-poor by design, LSST-density is where the
+# concentration measurement is expected to become viable; this config is
+# meant to characterize the compute cost of running that at real HPC scale,
+# not necessarily to be run to completion on this machine (see performance
+# evaluation notes for extrapolated total runtime).
+#
+# Usage:
+#   RUN_DIR=~/destacking_data/output/perf_test_lsst \
+#     python scripts/gamma_inference.py scripts/perf_test_lsst.yaml
+#   (RUN_DIR is env-var only, not a YAML key — see perf_test_des_wazp.yaml.)
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: true
+inference:  true
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [0.0, 0.0]
+n_gamma:     1
+n_workers:   16           # this machine has 16 cores (see performance
+                           # evaluation notes) -- pool size for both the
+                           # simulation stage and each nautilus fit
+
+# ═══ SIMULATION phase ═════════════════════════════════════════════════════
+n_clusters:      80000    # as requested
+z_cluster_range: [0.10, 0.60]   # unchanged -- same WaZP-like lens sample;
+                                 # only the source survey changes for LSST
+
+# Source survey. density=30 gal/arcmin^2 as requested (close to the LSST
+# DESC Y10 SRD gold-sample density of 27/arcmin^2, Mandelbaum+2018).
+#
+# Redshift distribution: the DESC Science Requirements Document (Mandelbaum
+# et al. 2018, arXiv:1809.01669) gives the fiducial LSST source n(z) as a
+# Smail-type form n(z) ∝ z^2 exp[-(z/z0)^alpha_SRD], with (z0, alpha_SRD) =
+# (0.13, 0.78) for Y1 and (0.11, 0.68) for Y10. That is algebraically the
+# same family as this code's des_y3_source_pdf, (z/z0)^alpha * exp(-(z/z0)^beta)
+# up to a constant normalisation, with alpha(code)=2 (fixed prefactor
+# exponent matching SRD's "z^2"), beta(code)=alpha_SRD, z0(code)=z0(SRD).
+# Chose Y10 (denser, more advanced survey stage) since it's the closer match
+# to the requested 30 gal/arcmin^2 (Y10 gold=27) rather than Y1 (10/arcmin^2).
+# Verified numerically: this (z0=0.11, alpha_SRD=0.68) gives mean z ~= 1.04,
+# consistent with the literature LSST Y10 source mean redshift (~1.05).
+density:     30.0
+shape_noise: 0.27          # unchanged -- not requested to differ from DES
+smail_alpha: 2.0            # fixed prefactor exponent (matches SRD's z^2)
+smail_beta:  0.68           # SRD Y10 alpha_SRD
+smail_z0:    0.11           # SRD Y10 z0
+
+# Physics (unchanged defaults -- realistic per-cluster compute cost)
+triaxiality:  true
+miscentering: true
+f_cen:           0.64
+sigma_off_mpc_h: 0.32
+
+# Simulated radial grid [Mpc]: np.logspace(inner, outer, n)
+sim_log_inner_radius: -0.8
+sim_log_outer_radius:  0.6
+sim_n_radii:           8
+
+# Measurement
+n_cov_bootstrap: 200      # galaxy bootstrap draws per cluster (DV + cov)
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 10            # 10 bootstrapped inference runs, as requested
+# Wall-time budget per nautilus fit. Code's own scaling rule: "600s default
+# is adequate for ~1500 clusters; larger samples need proportionally more".
+# 600 * (80000/1500) ~= 32000s; +~13% margin (matching the existing
+# 15,967-cluster convention of 7200s vs. its ~6390s linear estimate) ->
+# 36000s (10h) per fit. With n_bootstrap=10 fits run SEQUENTIALLY (each
+# internally parallel over n_workers=16), a full run could take up to
+# 10 x 10h = 100h of wall time if every fit used its full budget -- see
+# the performance evaluation for a measured (not worst-case-budget)
+# estimate of actual convergence time.
+timeout: 36000
+
+r_min_fit: 0.5
+fit_fmiss:           0.36
+fit_sigma_off_mpc_h: 0.32

@@ -437,7 +437,13 @@ needed.
    `scripts/old_scripts/` moved to `scripts/archive/` (`old_scripts/`
    subfolder preserved) with a short `scripts/archive/README.md`
    explaining why. `hisnr_tri_mis.yaml`/`hisnr_triaxial.yaml` were checked
-   and do **not** reference a deleted path — left in place in `scripts/`.
+   at the time and did **not** reference a deleted path, so were initially
+   left in place — since superseded: removed 2026-08-31 as part of a
+   broader `scripts/*.yaml` consolidation down to 4 working configs
+   (`perf_test_des_wazp.yaml`, `perf_test_lsst.yaml`,
+   `wazp_desy3_real_data_floor6.yaml` +
+   `wazp_desy3_inference_boost_floor6.yaml`) plus the two documented
+   `*_config_example.yaml` templates and the two Diemer19-pipeline configs.
 7. ~~**No top-level pointer to this manual.**~~ **FIXED**: `README.md` now
    has a "Documentation" section linking `docs/MANUAL.md`.
 8. ~~**Synthetic quickstart not flagged as the golden path.**~~ **FIXED**:

@@ -94,7 +94,8 @@ FILTERED_NPZ = f"{REAL_DATA_DIR}/metacal_filtered.npz"
 # by side instead of clobbering each other. "" reproduces the original
 # (factor=1.1, the xlensing-default-matching baseline) filenames — back to
 # baseline: the boost fit needs to match wazp_real_data (factor=1.1), which
-# is what the current joint fit (wazp_desy3_inference.yaml) reads.
+# is what the current joint fit (wazp_desy3_inference_boost_floor6.yaml,
+# the reference converged real-data config) reads.
 RUN_TAG = ""
 
 BKG_CACHE  = f"{REAL_DATA_DIR}/wazp_stacked_bkgs{RUN_TAG}.pkl"
