@@ -7,16 +7,32 @@ name = "destacking"
 version = "0.1.0"
 description = "Joint fitting of weak lensing profiles for galaxy cluster scaling relations"
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.9"
 dependencies = [
     "numpy",
     "scipy",
     "astropy",
+    "nautilus-sampler",
+    "colossus",
+    "cluster_toolkit",
+    "corner",
+    "h5py",
+    "multiprocess",
+    "scikit-learn",
+    "tqdm",
+    "pyyaml",
+    "matplotlib",
 ]
 
 [project.optional-dependencies]
-fitting = ["nautilus-sampler"]
-# simulation requires xlensing: pip install git+https://github.com/andrevitorelli/xlensing
+# xlensing is required for every simulation/measurement path (destacking.simulation,
+# prepare_real_data.py, wazp_stacked_analysis.py) but is not on PyPI, so it cannot be
+# a plain PEP 508 dependency here. Install it first:
+#   pip install git+https://github.com/andrevitorelli/xlensing
+# gamma_recovery_scan.py additionally needs ngmix, which has no portable PyPI wheel
+# on all platforms; install separately if you need that specific script.
+xlensing = ["ngmix"]
 
 [tool.setuptools.packages.find]
 include = ["destacking*"]
