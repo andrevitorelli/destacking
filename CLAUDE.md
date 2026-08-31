@@ -24,10 +24,17 @@ Not stubs — this is an actively developed, ~8,000-line pipeline across `destac
 - **`destacking/plotting.py`** — scan-result and corner-plot helpers.
 - **`destacking/utils.py`** — small shared helpers (deterministic seeding, duration formatting).
 
-Key scripts (all YAML-configured, `python scripts/foo.py config.yaml`):
-- **`scripts/gamma_inference.py`** — the main simulation+inference driver (see its module docstring for the full config surface: phase toggles, radial grids, `fit_params` per-parameter fit control, boost correction via `boosts:`, miscentering). `scripts/gamma_inference_diemer.py` is its Diemer19-baseline sibling.
-- **`scripts/prepare_real_data.py`** — builds a `gamma_inference.py`-compatible `data_folder` from real WaZP + DES-Y3-like metacal catalogs (boost-free measurement by design; see MANUAL §3).
-- **`scripts/wazp_stacked_analysis.py`** — independent stacked-analysis cross-check (stacks, boost fits, per-stack NFW fits, mass-richness/mass-concentration power-law fits).
+Two main scripts, kept directly in `scripts/` (YAML-configured, `python scripts/foo.py config.yaml`):
+- **`scripts/gamma_inference.py`** — the main simulation+inference driver (see its module docstring for the full config surface: phase toggles, radial grids, `fit_params` per-parameter fit control, boost correction via `boosts:`, miscentering).
+- **`scripts/gamma_inference_diemer.py`** — its Diemer19-baseline sibling.
+
+Everything else that supports those two (data prep, cross-checks, plotting) lives in `scripts/auxiliary_scripts/`:
+- **`prepare_real_data.py`** — builds a `gamma_inference.py`-compatible `data_folder` from real WaZP + DES-Y3-like metacal catalogs (boost-free measurement by design; see MANUAL §3).
+- **`wazp_stacked_analysis.py`** — independent stacked-analysis cross-check (stacks, boost fits, per-stack NFW fits, mass-richness/mass-concentration power-law fits).
+- **`make_corner_plots.py`** — renders a corner plot for every per-bootstrap fit in one or more `gamma_inference.py` run directories.
+- **`gen_sim_data_for_notebooks.py`** — generates notebook-compatible simulated data for the `SIMS=True` toggle in `prototype_destacking.ipynb`/`wazp_lensing_signals.ipynb`/`wazp_mass_richness_by_delta_m.ipynb`.
+- **`sphere_vs_triaxial.py`**, **`add_stacked_comparison.py`**, **`deficit_vs_concentration.py`** — the triaxiality-vs-sphericity stacking-bias diagnostic suite (the latter two extend the first's output).
+
 - **`scripts/archive/`** — non-functional debug scripts/configs, kept for history only; see `scripts/archive/README.md`. Do not use as a starting point for new work.
 
 Real and simulated data/outputs live outside the repo, under `~/destacking_data/{sims,real_data,output}/` (moved out 2026-07-27 for disk-space reasons) — see path conventions in `gamma_inference.py`/`prepare_real_data.py`.

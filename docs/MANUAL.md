@@ -41,34 +41,27 @@ and `nautilus` for nested sampling.
 ```toml
 [project]
 requires-python = ">=3.9"
-dependencies = ["numpy", "scipy", "astropy"]
-
-[project.optional-dependencies]
-fitting = ["nautilus-sampler"]
+dependencies = [
+    "numpy", "scipy", "astropy", "nautilus-sampler", "colossus",
+    "cluster_toolkit", "corner", "h5py", "multiprocess", "scikit-learn",
+    "tqdm", "pyyaml", "matplotlib",
+]
 ```
 Install with `pip install -e .` (editable) or `pip install .` from the repo
-root. `pip install -e .[fitting]` adds `nautilus-sampler`.
+root.
 
-### Not declared, but required by the code actually run
+### One dependency not declared: `xlensing`
 
-A grep of every `import`/`from` statement across `destacking/` and
-`scripts/` turns up dependencies the packaging does not list:
-`xlensing` (external, install via
-`pip install git+https://github.com/andrevitorelli/xlensing` — noted only
-as a comment in `pyproject.toml`, not a real dependency spec), `colossus`
-(Diemer & Joyce 2019 concentration model, Tinker+08 halo mass function),
-`cluster_toolkit` (boost-factor fitting), `corner` (posterior corner
-plots), `h5py` (metacal HDF5 catalogs), `multiprocess` (parallel
-simulation/measurement), `ngmix` (used by `gamma_recovery_scan.py`),
-`scikit-learn` (`sklearn.neighbors.BallTree` in `wazp_stacked_analysis.py`),
-`tqdm`, `PyYAML` (all script configs are YAML). See §9 for this as a 1.0
-punch-list item — a fresh `pip install -e .` today does **not** get you a
-runnable pipeline; you additionally need at minimum:
+`xlensing` (https://github.com/andrevitorelli/xlensing) is required for
+every simulation/measurement path (`destacking.simulation`,
+`prepare_real_data.py`, `wazp_stacked_analysis.py`) but is not on PyPI, so
+it cannot be a plain PEP 508 dependency here — install it separately:
 ```
-pip install git+https://github.com/andrevitorelli/xlensing nautilus-sampler \
-            colossus cluster_toolkit corner h5py multiprocess ngmix \
-            scikit-learn tqdm pyyaml
+pip install git+https://github.com/andrevitorelli/xlensing
 ```
+(`ngmix` was previously an optional extra for `gamma_recovery_scan.py`;
+that script has since been removed as superseded, so `ngmix` is no longer
+a dependency of anything in this repo.)
 
 ## 3. Core concepts
 
@@ -190,7 +183,7 @@ near-zero-width posterior, per the `TIMEOUT` docstring note).
 Two-stage pipeline (this needs proprietary survey catalogs an outside
 reader will not have — see §9):
 ```
-python scripts/prepare_real_data.py my_real_data_config.yaml   # measurement
+python scripts/auxiliary_scripts/prepare_real_data.py my_real_data_config.yaml   # measurement
 python scripts/gamma_inference.py wazp_desy3_inference_boost_floor6.yaml  # fit
 ```
 `prepare_real_data.py` (see its full module docstring and
@@ -217,7 +210,7 @@ wazp_boost_fits.pkl>` to apply the stack-level boost correction (§3, §6).
 ### (c) Stacked cross-check
 
 ```
-python scripts/wazp_stacked_analysis.py
+python scripts/auxiliary_scripts/wazp_stacked_analysis.py
 ```
 Re-analyzes the same real catalogs the traditional way: bins clusters via
 `assign_stack_bins`, stacks each bin with `xlensing.data.stacked_signal`

@@ -15,7 +15,7 @@
 # other real-data configs -- cluster selection and source pre-filtering
 # don't depend on the radial binning.
 #
-# Usage: python prepare_real_data.py wazp_desy3_real_data_floor6.yaml
+# Usage: python scripts/auxiliary_scripts/prepare_real_data.py wazp_desy3_real_data_floor6.yaml
 
 # ═══ Cluster catalogue ═══════════════════════════════════════════════════
 cluster_catalog_file: /home/andre/destacking_data/real_data/wazp_real_data.fits

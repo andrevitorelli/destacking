@@ -1,6 +1,6 @@
 # prepare_real_data.py configuration template.
 #
-# Usage: python prepare_real_data.py my_real_data_config.yaml
+# Usage: python scripts/auxiliary_scripts/prepare_real_data.py my_real_data_config.yaml
 #
 # Produces a gamma_inference.py-compatible data_folder from a real WaZP-like
 # cluster catalogue and a DES-Y3-like metacalibration shear catalogue. See

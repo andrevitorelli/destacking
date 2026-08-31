@@ -25,14 +25,10 @@ dependencies = [
     "matplotlib",
 ]
 
-[project.optional-dependencies]
 # xlensing is required for every simulation/measurement path (destacking.simulation,
 # prepare_real_data.py, wazp_stacked_analysis.py) but is not on PyPI, so it cannot be
 # a plain PEP 508 dependency here. Install it first:
 #   pip install git+https://github.com/andrevitorelli/xlensing
-# gamma_recovery_scan.py additionally needs ngmix, which has no portable PyPI wheel
-# on all platforms; install separately if you need that specific script.
-xlensing = ["ngmix"]
 
 [tool.setuptools.packages.find]
 include = ["destacking*"]
