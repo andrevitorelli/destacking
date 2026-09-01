@@ -1,0 +1,83 @@
+# HPC production config: LSST-like conditions, true gamma = +0.679.
+#
+# One of 15 configs spanning true gamma in [-0.5, 1.0] (np.linspace(-0.5,
+# 1.0, 15)) at LSST-like conditions -- see the sibling DES_gamma*.yaml
+# configs for the DES/WaZP-like counterpart at the same 15 gamma values. All
+# 15 LSST configs are identical except gamma_range/gamma_true below. Derived
+# from the local single-gamma performance test (scripts/perf_test_lsst.yaml,
+# see that file's history for how density/n_clusters/timeout were chosen)
+# with n_bootstrap raised from 10 to the full production value of 100.
+# "gamma" here is a synthetic multiplicative shear-recovery test parameter
+# injected into the simulation and recovered by the fit -- see docs/MANUAL.md
+# for what it means (not an astrophysical slope).
+#
+# Usage (paired with scripts/configs/LSST_gamma+0.679.slurm):
+#   python scripts/gamma_inference.py scripts/configs/LSST_gamma+0.679.yaml
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: true
+inference:  true
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [0.678571, 0.678571]   # single true-gamma point of the 15-value HPC scan
+n_gamma:     1
+n_workers:   16           # pool size for BOTH the simulation stage and each
+                           # nautilus fit's likelihood pool (16 threads, as requested)
+
+# ═══ SIMULATION phase ═════════════════════════════════════════════════════
+n_clusters:      80000    # as requested
+z_cluster_range: [0.10, 0.60]   # unchanged -- same WaZP-like lens sample;
+                                 # only the source survey changes for LSST
+
+# Source survey. density=30 gal/arcmin^2 as requested (close to the LSST
+# DESC Y10 SRD gold-sample density of 27/arcmin^2, Mandelbaum+2018).
+#
+# Redshift distribution: the DESC Science Requirements Document (Mandelbaum
+# et al. 2018, arXiv:1809.01669) gives the fiducial LSST source n(z) as a
+# Smail-type form n(z) ∝ z^2 exp[-(z/z0)^alpha_SRD], with (z0, alpha_SRD) =
+# (0.13, 0.78) for Y1 and (0.11, 0.68) for Y10. That is algebraically the
+# same family as this code's des_y3_source_pdf, (z/z0)^alpha * exp(-(z/z0)^beta)
+# up to a constant normalisation, with alpha(code)=2 (fixed prefactor
+# exponent matching SRD's "z^2"), beta(code)=alpha_SRD, z0(code)=z0(SRD).
+# Chose Y10 (denser, more advanced survey stage) since it's the closer match
+# to the requested 30 gal/arcmin^2 (Y10 gold=27) rather than Y1 (10/arcmin^2).
+# Verified numerically: this (z0=0.11, alpha_SRD=0.68) gives mean z ~= 1.04,
+# consistent with the literature LSST Y10 source mean redshift (~1.05).
+density:     30.0
+shape_noise: 0.27          # unchanged -- not requested to differ from DES
+smail_alpha: 2.0            # fixed prefactor exponent (matches SRD's z^2)
+smail_beta:  0.68           # SRD Y10 alpha_SRD
+smail_z0:    0.11           # SRD Y10 z0
+
+# Physics (realistic per-cluster compute cost)
+triaxiality:  true
+miscentering: true
+f_cen:           0.64
+sigma_off_mpc_h: 0.32
+
+# Simulated radial grid [Mpc]: np.logspace(inner, outer, n)
+sim_log_inner_radius: -0.8
+sim_log_outer_radius:  0.6
+sim_n_radii:           8
+
+# Measurement
+n_cov_bootstrap: 200      # galaxy bootstrap draws per cluster (DV + cov)
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 100           # 100 likelihood bootstraps, as requested
+# Wall-time budget per nautilus fit. Code's own scaling rule: "600s default
+# is adequate for ~1500 clusters; larger samples need proportionally more".
+# 600 * (80000/1500) ~= 32000s; +~13% margin -> 36000s (10h) per fit. With
+# n_bootstrap=100 fits run SEQUENTIALLY (each internally parallel over
+# n_workers=16), measured single-fit time at this scale was ~66.7 min (see
+# 2026-08-31 performance evaluation) -> ~111h (~4.6 days) total for 100
+# fits on a 16-core node -- see the paired .slurm script's --time and its
+# comment on this being a real, large walltime request, and on using this
+# pipeline's own checkpoint/resume support if your cluster's job-length
+# cap is shorter than that.
+timeout: 36000
+
+r_min_fit: 0.5
+fit_fmiss:           0.36
+fit_sigma_off_mpc_h: 0.32
