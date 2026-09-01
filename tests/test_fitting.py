@@ -100,6 +100,103 @@ def test_cholog_gaussian_consistent_with_scipy():
     np.testing.assert_allclose(result, expected, rtol=1e-8)
 
 
+def _cholog_gaussian_reference_loop(data_vectors, cov_matrices):
+    """Pre-vectorization implementation (explicit per-cluster Python loop),
+    kept here only as a reference for equivalence testing -- see
+    destacking.fitting.cholog_gaussian's docstring for why it was
+    replaced."""
+    n, k = data_vectors.shape
+    total_log_lik = 0.0
+    log_2pi = np.log(2 * np.pi)
+    for i in range(n):
+        valid = np.isfinite(data_vectors[i])
+        if not valid.any():
+            continue
+        dv_i  = data_vectors[i][valid]
+        cov_i = cov_matrices[i][np.ix_(valid, valid)]
+        k_eff = int(valid.sum())
+        try:
+            L = np.linalg.cholesky(cov_i)
+            y = np.linalg.solve(L, dv_i)
+            quad_form = float(np.dot(y, y))
+            log_det   = 2.0 * float(np.sum(np.log(np.diag(L))))
+            log_lik   = -0.5 * (k_eff * log_2pi + log_det + quad_form)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+            return -np.inf
+        if not np.isfinite(log_lik):
+            return -np.inf
+        total_log_lik += log_lik
+    if not np.isfinite(total_log_lik):
+        return -np.inf
+    return total_log_lik
+
+
+def test_cholog_gaussian_matches_reference_loop_with_heterogeneous_masks():
+    # Each cluster has a DIFFERENT pattern of NaN bins (not just a
+    # different count) -- the case the vectorized rewrite has to get
+    # right via per-cluster block-diagonal padding, not just per-cluster
+    # counting.
+    rng = np.random.default_rng(11)
+    n, k = 8, 6
+    vecs, covs = _make_data(n=n, k=k, rng=rng)
+    vecs = rng.standard_normal((n, k)) * 0.3
+
+    rng2 = np.random.default_rng(12)
+    for i in range(n):
+        n_bad = rng2.integers(0, k)  # 0..k-1 invalid bins, random pattern
+        bad_idx = rng2.choice(k, size=n_bad, replace=False)
+        vecs[i, bad_idx] = np.nan
+
+    result   = cholog_gaussian(vecs, covs)
+    expected = _cholog_gaussian_reference_loop(vecs, covs)
+    np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+
+def test_cholog_gaussian_all_bins_invalid_cluster_contributes_zero():
+    n, k = 4, 5
+    rng = np.random.default_rng(13)
+    vecs, covs = _make_data(n=n, k=k, rng=rng)
+    vecs = rng.standard_normal((n, k)) * 0.2
+
+    vecs_with_dead = vecs.copy()
+    vecs_with_dead[2, :] = np.nan   # cluster 2 has zero valid bins
+
+    remaining = np.delete(np.arange(n), 2)
+    expected = cholog_gaussian(vecs[remaining], covs[remaining])
+    result   = cholog_gaussian(vecs_with_dead, covs)
+    np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+
+def test_cholog_gaussian_partial_mask_matches_manual_submatrix():
+    # One cluster, bins {0, 2} masked out of k=4 -- check against the
+    # 2x2 valid-submatrix likelihood computed independently via scipy.
+    k = 4
+    cov = np.array([[2.0, 0.3, 0.1, 0.0],
+                     [0.3, 1.5, 0.2, 0.1],
+                     [0.1, 0.2, 1.8, 0.05],
+                     [0.0, 0.1, 0.05, 1.2]])
+    vec = np.array([0.4, np.nan, -0.6, np.nan])
+    result = cholog_gaussian(vec[None, :], cov[None, :, :])
+
+    valid = [0, 2]
+    sub_cov = cov[np.ix_(valid, valid)]
+    sub_vec = vec[valid]
+    expected = multivariate_normal.logpdf(sub_vec, mean=np.zeros(2), cov=sub_cov)
+    np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+
+def test_cholog_gaussian_non_pd_after_masking_returns_neg_inf():
+    # The valid (unmasked) submatrix itself is non-positive-definite --
+    # must still propagate to -inf through the padded batched Cholesky.
+    n, k = 2, 3
+    covs = np.zeros((n, k, k))
+    covs[:, -1, -1] = 1.0  # last bin has a sane variance, masked out below
+    vecs = np.zeros((n, k))
+    vecs[:, -1] = np.nan   # mask out the only non-degenerate bin
+    result = cholog_gaussian(vecs, covs)
+    assert result == -np.inf
+
+
 # ---------------------------------------------------------------------------
 # log_likelihood
 # ---------------------------------------------------------------------------
