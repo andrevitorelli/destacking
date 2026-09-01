@@ -23,6 +23,26 @@ def cholog_gaussian(data_vectors, cov_matrices):
     Returns ``-np.inf`` if any cluster yields a non-finite contribution
     on its valid bins, so the nautilus sampler never sees NaN.
 
+    Vectorized over clusters (no per-cluster Python loop): profiling on a
+    real 80,000-cluster likelihood call showed the old per-cluster loop
+    (``np.linalg.cholesky``/``solve`` on each cluster's tiny k×k matrix
+    individually) cost ~93% of the total call time, almost entirely
+    Python-loop and numpy-dispatch overhead rather than arithmetic (e.g.
+    building the ``np.ix_`` mask index cost more than the Cholesky
+    decomposition itself). Each cluster's own (possibly different) set of
+    NaN bins is handled by replacing, per cluster, the invalid rows/cols of
+    its covariance with a decoupled identity block and its invalid
+    residual entries with 0 -- this contributes exactly 0 to that
+    cluster's quadratic form and log-determinant (log(1)=0), and the
+    per-cluster normalization constant still uses that cluster's true
+    k_eff (valid-bin count), not the padded k. A block-diagonal matrix's
+    Cholesky factor is the direct sum of each block's factor, so this is
+    algebraically identical to the old valid-submatrix-only computation,
+    just done for every cluster in one batched (N,k,k) call instead of N
+    separate Python-level ones. See tests/test_fitting.py for the
+    equivalence checks (including against the pre-vectorization
+    implementation) this relies on.
+
     Parameters
     ----------
     data_vectors : ndarray (N, k)
@@ -31,28 +51,40 @@ def cholog_gaussian(data_vectors, cov_matrices):
         Per-cluster covariance matrices.  Rows/cols for NaN bins are unused.
     """
     n, k = data_vectors.shape
-    total_log_lik = 0.0
     log_2pi = np.log(2 * np.pi)
 
-    for i in range(n):
-        valid = np.isfinite(data_vectors[i])      # (k,) — per-bin mask
-        if not valid.any():
-            continue                               # no valid bins — skip cluster
-        dv_i  = data_vectors[i][valid]
-        cov_i = cov_matrices[i][np.ix_(valid, valid)]
-        k_eff = int(valid.sum())
-        try:
-            L = np.linalg.cholesky(cov_i)
-            y = np.linalg.solve(L, dv_i)
-            quad_form = float(np.dot(y, y))
-            log_det   = 2.0 * float(np.sum(np.log(np.diag(L))))
-            log_lik   = -0.5 * (k_eff * log_2pi + log_det + quad_form)
-        except (np.linalg.LinAlgError, ValueError, FloatingPointError):
-            return -np.inf
-        if not np.isfinite(log_lik):
-            return -np.inf
-        total_log_lik += log_lik
+    valid = np.isfinite(data_vectors)                  # (n, k)
+    k_eff = valid.sum(axis=1)                          # (n,)
+    dv    = np.where(valid, data_vectors, 0.0)         # (n, k)
 
+    invalid = ~valid
+    mask2d  = invalid[:, :, None] | invalid[:, None, :]   # (n, k, k)
+    cov     = np.where(mask2d, 0.0, cov_matrices)
+
+    idx_n = np.arange(n)[:, None]
+    idx_k = np.arange(k)[None, :]
+    diag_cur = cov[idx_n, idx_k, idx_k]
+    cov[idx_n, idx_k, idx_k] = np.where(invalid, 1.0, diag_cur)
+
+    try:
+        L = np.linalg.cholesky(cov)                     # batched, (n, k, k)
+        # dv[..., None]: solve's batched-vector-RHS broadcasting is
+        # ambiguous when b has exactly one fewer dimension than a (numpy
+        # 2.2 dispatches it as a single (m,n) matrix RHS, not a batch of
+        # vectors) -- an explicit trailing axis of size 1 makes the "batch
+        # of single-column matrices" case unambiguous instead.
+        y = np.linalg.solve(L, dv[..., None])[..., 0]   # batched, (n, k)
+    except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+        return -np.inf
+
+    quad_form = np.sum(y * y, axis=1)                                       # (n,)
+    log_det   = 2.0 * np.sum(np.log(np.diagonal(L, axis1=1, axis2=2)), axis=1)  # (n,)
+    log_lik   = -0.5 * (k_eff * log_2pi + log_det + quad_form)              # (n,)
+
+    if not np.all(np.isfinite(log_lik)):
+        return -np.inf
+
+    total_log_lik = float(np.sum(log_lik))
     if not np.isfinite(total_log_lik):
         return -np.inf
     return total_log_lik
