@@ -43,22 +43,43 @@ and `nautilus` for nested sampling.
 requires-python = ">=3.9"
 dependencies = [
     "numpy", "scipy", "astropy", "nautilus-sampler", "colossus",
-    "cluster_toolkit", "corner", "h5py", "multiprocess", "scikit-learn",
+    "corner", "h5py", "multiprocess", "scikit-learn",
     "tqdm", "pyyaml", "matplotlib",
 ]
 ```
 Install with `pip install -e .` (editable) or `pip install .` from the repo
-root.
+root. Verified 2026-09-01 in a fresh venv: this alone resolves and installs
+cleanly (every one of these names really is on PyPI).
 
-### One dependency not declared: `xlensing`
+### Two dependencies not declared: `xlensing` and `cluster_toolkit`
 
-`xlensing` (https://github.com/andrevitorelli/xlensing) is required for
-every simulation/measurement path (`destacking.simulation`,
-`prepare_real_data.py`, `wazp_stacked_analysis.py`) but is not on PyPI, so
-it cannot be a plain PEP 508 dependency here — install it separately:
+Neither is on PyPI, so neither can be a plain PEP 508 dependency here —
+install both separately:
 ```
 pip install git+https://github.com/andrevitorelli/xlensing
+pip install git+https://github.com/tmcclintock/cluster_toolkit
 ```
+`xlensing` is required for every simulation/measurement path
+(`destacking.simulation`, `prepare_real_data.py`, `wazp_stacked_analysis.py`);
+`cluster_toolkit` for the boost-correction path (`wazp_stacked_analysis.py`,
+`gamma_inference.py`'s `boosts:` config key). **A package named
+`cluster_toolkit` does exist on PyPI but is unrelated/empty — do NOT add
+it to `pyproject.toml`'s `dependencies`, `pip install -e .` will fail
+outright** ("No matching distribution found for cluster_toolkit"); this
+was actually in `dependencies` until verified and fixed 2026-09-01.
+
+**Known gap, verified 2026-09-01, not yet fixed:** a fresh
+`pip install git+https://github.com/andrevitorelli/xlensing` installs but
+then fails at `import xlensing` with `FileNotFoundError:
+.../site-packages/xlensing/misc_NFW_radii.fits` — that repo's `setup.py`
+(`packages=['xlensing']`, no `package_data`/`MANIFEST.in`) never ships its
+`.fits` resource files in a built wheel/sdist. This machine's working
+install is an **editable** local checkout (`pip install -e ~/github/xlensing`),
+which sidesteps the bug by reading the files straight off disk — so it's
+easy to not notice. Anyone following the documented git-install command on
+a fresh machine will hit this. Fix belongs in the `xlensing` repo itself
+(add `package_data`/`include_package_data` for the `.fits` files), not here.
+
 (`ngmix` was previously an optional extra for `gamma_recovery_scan.py`;
 that script has since been removed as superseded, so `ngmix` is no longer
 a dependency of anything in this repo.)

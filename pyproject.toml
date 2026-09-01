@@ -15,7 +15,6 @@ dependencies = [
     "astropy",
     "nautilus-sampler",
     "colossus",
-    "cluster_toolkit",
     "corner",
     "h5py",
     "multiprocess",
@@ -25,10 +24,16 @@ dependencies = [
     "matplotlib",
 ]
 
-# xlensing is required for every simulation/measurement path (destacking.simulation,
-# prepare_real_data.py, wazp_stacked_analysis.py) but is not on PyPI, so it cannot be
-# a plain PEP 508 dependency here. Install it first:
+# Two dependencies are not on PyPI, so they cannot be plain PEP 508 entries
+# above -- install both separately before using the boost-correction path
+# (destacking.simulation, prepare_real_data.py, wazp_stacked_analysis.py,
+# gamma_inference.py's boost correction):
 #   pip install git+https://github.com/andrevitorelli/xlensing
+#   pip install git+https://github.com/tmcclintock/cluster_toolkit
+# ("cluster_toolkit" does not exist on PyPI at all under that name -- do
+# not add it to `dependencies` above, `pip install -e .` will fail outright
+# with "No matching distribution found for cluster_toolkit" if you do;
+# verified 2026-09-01.)
 
 [tool.setuptools.packages.find]
 include = ["destacking*"]
