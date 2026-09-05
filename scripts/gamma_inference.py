@@ -365,7 +365,21 @@ SIGMA_OFF_MPC   = SIGMA_OFF_MPC_H / H_PLANCK
 
 DENSITY         = float(_cfg("density",     "DENSITY",     7.5,  cast=float))
 SHAPE_NOISE     = float(_cfg("shape_noise", "SHAPE_NOISE", 0.27, cast=float))
-WIDTH_RAD       = 0.006
+# Fixed angular half-width for the simulated source-injection aperture.
+# Physical aperture = WIDTH_RAD * D_A(z_cluster), which grows with cluster
+# redshift -- at the OLD value (0.006 rad) this was only ~2.36 Mpc at the
+# bottom of z_cluster_range (z=0.10), smaller than the stacked-analysis
+# radial grid's outer bin edge (~4.43 Mpc, wazp_stacked_analysis.py's
+# 16-bin logspace(-0.8,0.6,16) grid -- the joint fit's own 8-bin grid has
+# the same outer bound). Low-z simulated clusters were running out of
+# simulated sky before reaching the outer stacking bins, which
+# xlensing.data.stacked_signal's boost estimator (N_obs/N_random) reads as
+# a large artificial "boost" deficit rather than the real ~1 a clean
+# (uncontaminated) simulation should show -- found 2026-09-05 validating
+# scripts/auxiliary_scripts/stacked_sim_analysis.py locally before the HPC
+# campaign. 0.0169 rad gives >=1.5x margin over the outer bin edge even at
+# z=0.10 (the worst case), 3.6x-5.4x margin over the rest of the range.
+WIDTH_RAD       = 0.0169
 Z_SRC_RANGE     = (0.0, 2.5)
 
 _log_r = np.log10(SIM_RADII)

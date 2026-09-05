@@ -1,0 +1,39 @@
+# HPC production config (cluster_runs.md spec), STAGE 2/3 "joint":
+# DES-like conditions, true gamma = -0.333, joint (destacking)
+# per-cluster fit, inference-only against stage 1's ("simulate") already-
+# written checkpoint -- SLURM dependency ensures stage 1 completes first.
+# n_bootstrap=50, n_workers=32 threads, per cluster_runs.md.
+#
+# Usage: python scripts/gamma_inference.py scripts/configs/DES_gamma-0.333_joint.yaml
+# (RUN_DIR -- this stage's OWN output location for bootstrap fit results
+# -- is set by the paired .slurm script's env var, same convention as the
+# local perf-test configs. data_folder below is a separate YAML key
+# pointing at stage 1's already-written checkpoint, read-only.)
+
+simulation:  false
+inference:   true
+data_folder: /scratch/andrezvitorelli/data/output/DES_gamma-0.333_sim
+
+# REQUIRED in inference-only mode (not optional like in a combined run) --
+# must describe the radial grid data_folder's checkpoint was measured on.
+fit_log_inner_radius: -0.8
+fit_log_outer_radius:  0.6
+fit_n_radii:           8
+
+gamma_range: [-0.333333, -0.333333]
+n_gamma:     1
+n_workers:   32
+
+bootstrap:   true
+n_bootstrap: 50
+# Wall-time budget per nautilus fit -- unchanged from the local
+# performance-test configs (density/n_clusters same); the vectorized
+# cholog_gaussian (2026-09-01, ~4.4x fit-phase speedup) and 32 (vs. 16
+# tested locally) workers should keep actual per-fit time comfortably
+# under this on Hypatia.
+timeout: 7200
+
+r_min_fit: 0.5
+fit_fmiss:           0.36
+fit_sigma_off_mpc_h: 0.32
+

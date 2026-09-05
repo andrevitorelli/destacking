@@ -1,0 +1,37 @@
+# Conda environment for running destacking (+xlensing) on the Hypatia HPC
+# cluster, per cluster_runs.md.
+#
+# Usage (on the cluster):
+#   conda env create -f scripts/environment.yml
+#   conda activate destacking
+#   pip install git+https://github.com/tmcclintock/cluster_toolkit
+#   pip install -e /scratch/andrezvitorelli/github/xlensing
+#   pip install -e /scratch/andrezvitorelli/github/destacking
+#
+# xlensing and destacking are deliberately NOT listed here: they're the
+# actively-developed local checkouts (cluster_runs.md: "both xlensing and
+# destacking should run from their develop branches"), installed editable
+# from their cluster checkout paths after the env exists, not vendored
+# into this spec. cluster_toolkit is also left as a manual pip step since
+# it needs a C compiler at install time (cffi-based build) -- if that step
+# fails, check for a gcc/build-essential module and load it first.
+name: destacking
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - astropy
+  - corner
+  - h5py
+  - multiprocess
+  - scikit-learn
+  - tqdm
+  - pyyaml
+  - matplotlib
+  - pip
+  - pip:
+      # Not on conda-forge; small pure-Python/wheel packages, safe via pip.
+      - nautilus-sampler
+      - colossus
