@@ -10,13 +10,16 @@
 # requirement). One of 10 configs spanning true gamma in [-0.5, 1.0]
 # (np.linspace(-0.5, 1.0, 10)).
 #
-# WIDTH_RAD note (2026-09-05): gamma_inference.py's source-injection
-# aperture was widened (0.006 -> 0.0169 rad) after this stage's own
-# stacked-analysis comparison revealed low-z simulated clusters ran out of
-# simulated sky before the stacking grid's outer bin -- see that constant's
-# comment in scripts/gamma_inference.py. This increases per-cluster source
-# count (~8-11x measured), hence this stage's own walltime/memory budget in
-# its paired .slurm script.
+# WIDTH_RAD note (2026-09-05): destacking/simulation.py converts WIDTH_RAD
+# (a physical target aperture radius [Mpc], see scripts/gamma_inference.py)
+# to each cluster's own angular half-width via THAT cluster's own DA(z) --
+# fixing a latent bug where every prior version of this pipeline used one
+# fixed reference redshift instead, shortchanging low-z clusters' simulated
+# field relative to the stacking analysis's fixed-Mpc radial grid. This
+# per-cluster fix costs about the same as the pipeline's original (pre-bug)
+# baseline -- not the ~10x higher compute/memory an earlier, since-reverted
+# fixed-angular-widening attempt would have cost. See scripts/gamma_inference.py's
+# WIDTH_RAD comment for the full history.
 #
 # Usage: python scripts/gamma_inference.py scripts/configs/DES_gamma+0.500_simulate.yaml
 # (RUN_DIR set by the paired .slurm script, not here.)
