@@ -365,21 +365,32 @@ SIGMA_OFF_MPC   = SIGMA_OFF_MPC_H / H_PLANCK
 
 DENSITY         = float(_cfg("density",     "DENSITY",     7.5,  cast=float))
 SHAPE_NOISE     = float(_cfg("shape_noise", "SHAPE_NOISE", 0.27, cast=float))
-# Fixed angular half-width for the simulated source-injection aperture.
-# Physical aperture = WIDTH_RAD * D_A(z_cluster), which grows with cluster
-# redshift -- at the OLD value (0.006 rad) this was only ~2.36 Mpc at the
-# bottom of z_cluster_range (z=0.10), smaller than the stacked-analysis
-# radial grid's outer bin edge (~4.43 Mpc, wazp_stacked_analysis.py's
-# 16-bin logspace(-0.8,0.6,16) grid -- the joint fit's own 8-bin grid has
-# the same outer bound). Low-z simulated clusters were running out of
-# simulated sky before reaching the outer stacking bins, which
-# xlensing.data.stacked_signal's boost estimator (N_obs/N_random) reads as
-# a large artificial "boost" deficit rather than the real ~1 a clean
-# (uncontaminated) simulation should show -- found 2026-09-05 validating
-# scripts/auxiliary_scripts/stacked_sim_analysis.py locally before the HPC
-# campaign. 0.0169 rad gives >=1.5x margin over the outer bin edge even at
-# z=0.10 (the worst case), 3.6x-5.4x margin over the rest of the range.
-WIDTH_RAD       = 0.0169
+# Physical target aperture radius [Mpc] for the simulated source-injection
+# field -- destacking.simulation._process_cluster converts this to each
+# cluster's own angular half-width via ITS OWN DA(z), not a fixed
+# reference redshift. Matches the RADIUS_MPC=5.0 convention used
+# everywhere else in the codebase (xlensing.data.stacked_signal calls,
+# prepare_real_data.py, gen_sim_data_for_notebooks.py), comfortably beyond
+# the stacked-analysis radial grid's outer bin edge (~4.43 Mpc,
+# wazp_stacked_analysis.py's 16-bin logspace(-0.8,0.6,16) grid; the joint
+# fit's own 8-bin grid has the same outer bound).
+#
+# Found and fixed 2026-09-05 validating scripts/auxiliary_scripts/
+# stacked_sim_analysis.py locally before the HPC campaign: every version
+# of this pipeline (back to the original prototype notebook's
+# simcluster(total_radius=5, ...) call) converted a physical radius using
+# a SINGLE fixed z=0.3 reference (destacking.simulation.simcluster,
+# DA(0, 0.3)) rather than each cluster's actual z -- at that fixed
+# reference, low-z clusters' simulated field (only ~2.36 Mpc physical at
+# z=0.10) fell short of the stacking grid's outer bin, which
+# xlensing.data.stacked_signal's boost estimator (N_obs/N_random) read as
+# a large artificial "boost" deficit rather than the ~1 a clean simulation
+# should show, while high-z clusters got an unnecessarily large field. An
+# intermediate fix (widening the fixed angular constant to cover the
+# worst case) measured ~10x higher simulation-phase compute/memory cost --
+# this per-cluster fix avoids that: every cluster now gets the same
+# appropriately-sized ~5.3 Mpc physical field regardless of redshift.
+WIDTH_RAD       = 5.0
 Z_SRC_RANGE     = (0.0, 2.5)
 
 _log_r = np.log10(SIM_RADII)

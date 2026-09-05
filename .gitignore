@@ -4,6 +4,7 @@
 !*.py
 !*.ipynb
 !*.md
+cluster_runs.md
 !*.toml
 !*.yaml
 !*.yml

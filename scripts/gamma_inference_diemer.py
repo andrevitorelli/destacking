@@ -341,7 +341,12 @@ SIGMA_OFF_MPC   = SIGMA_OFF_MPC_H / H_PLANCK
 
 DENSITY         = float(_cfg("density",     "DENSITY",     7.5,  cast=float))
 SHAPE_NOISE     = float(_cfg("shape_noise", "SHAPE_NOISE", 0.27, cast=float))
-WIDTH_RAD       = 0.006
+# Physical target aperture radius [Mpc], converted per-cluster via each
+# cluster's own DA(z) inside destacking.simulation._process_cluster -- see
+# scripts/gamma_inference.py's WIDTH_RAD comment for the full story (fixed
+# 2026-09-05; this sibling script shares the same underlying pipeline and
+# had the same latent bug).
+WIDTH_RAD       = 5.0
 Z_SRC_RANGE     = (0.0, 2.5)
 
 _log_r = np.log10(SIM_RADII)

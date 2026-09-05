@@ -397,7 +397,11 @@ class SimulationConfig:
     # Source survey
     density:     float                # source density [gal/arcmin^2]
     shape_noise: float                # per-component ellipticity RMS
-    width_rad:   float                # aperture half-width [rad]
+    width_rad:   float                # aperture PHYSICAL radius [Mpc] --
+                                       # converted to angular half-width
+                                       # per-cluster via that cluster's own
+                                       # DA(z), not a fixed reference z.
+                                       # See _process_cluster's comment.
     z_src_range: tuple                # (z_min, z_max) for sources
     z_src_alpha: float                # Smail n(z) parameters
     z_src_beta:  float
@@ -527,8 +531,9 @@ def _process_cluster(i):
     Pipeline stages
     ---------------
     1. Draw a random source-galaxy catalog around the cluster (Poisson
-       density ``cfg.density`` gal/arcmin^2, aperture half-width
-       ``cfg.width_rad``).
+       density ``cfg.density`` gal/arcmin^2, aperture physical radius
+       ``cfg.width_rad`` Mpc, converted to this cluster's own angular
+       half-width via its DA(z)).
     2. Assign DES Y3-like source redshifts (Smail distribution), lognormal
        metacal responses, and intrinsic shapes (per-component Gaussian
        with RMS ``cfg.shape_noise``, redrawn until |e| < 1).
@@ -580,11 +585,33 @@ def _process_cluster(i):
     a_i = _SHAPES["r_vir"][i]
     g_i = _G_IDX_SIM
 
+    # cfg.width_rad is a PHYSICAL target aperture radius [Mpc] (matching
+    # the RADIUS_MPC=5.0 convention used everywhere else in the codebase --
+    # xlensing.data.stacked_signal calls, prepare_real_data.py,
+    # scripts/auxiliary_scripts/gen_sim_data_for_notebooks.py), converted
+    # to an angular half-width using THIS cluster's own DA_i -- not a
+    # single fixed reference redshift. Found 2026-09-05: every version of
+    # this pipeline back to the original prototype notebook (which called
+    # simcluster(total_radius=5, ...)) converted a physical radius using a
+    # SINGLE fixed z=0.3 reference (destacking.simulation.simcluster,
+    # DA(0, 0.3)) rather than each cluster's actual z, so low-z clusters'
+    # simulated field was smaller in physical Mpc than the stacking
+    # analysis's fixed-Mpc radial grid needs, while high-z clusters got an
+    # unnecessarily large one. gen_sim_data_for_notebooks.py (a separate,
+    # simpler standalone generator) already does this correctly
+    # per-cluster; this ports that same pattern into the shared
+    # _process_cluster pipeline every gamma_inference*.py script uses.
+    # 0.3 Mpc buffer beyond the target radius, same convention as that
+    # script, so the actual measurement radius (Stage 5 below) sits safely
+    # inside the generated field's edge, not exactly on it.
+    DA_i = _DA_FAST(0, z_i)
+    width_rad_i = (cfg.width_rad + 0.3) / DA_i
+
     # Stage 1 — random source positions (metacal catalog layout:
     # ra, dec, z, e1, e2, R11, R12, R21, R22, w).  Shapes/z/responses are
     # placeholders here and get overwritten below with their own streams.
     gal_i  = make_simple_random_cat(
-        cfg.density, cfg.width_rad, cfg.z_src_range, shape_noise=0.0,
+        cfg.density, width_rad_i, cfg.z_src_range, shape_noise=0.0,
         seed=_seed(g_i, 4000 + i), poisson_density=True,
     ).T
     n_gals = len(gal_i)
@@ -674,13 +701,17 @@ def _process_cluster(i):
     # the origin; the offset (drawn in Mpc upstream) converts to radians
     # through the angular diameter distance.
     sources_mc = gal_sheared[:, [0, 1, 2, 3, 4, 9, 5, 6, 7, 8]]
-    DA_i       = _DA_FAST(0, z_i)
+    # DA_i already computed above (per-cluster aperture conversion) -- reused
+    # here, not recomputed.
     off_rad_i  = _OFF_MAG_MPC[i] / DA_i
     cen_ra_i   = off_rad_i * np.cos(_PHI_MIS[i])
     cen_dec_i  = off_rad_i * np.sin(_PHI_MIS[i])
 
+    # cfg.width_rad is now the physical target radius [Mpc] directly (see
+    # Stage 1's comment) -- the generated field extends 0.3 Mpc beyond
+    # this, so the measurement radius sits safely inside its edge.
     bg = metacal_cluster_lensing((cen_ra_i, cen_dec_i, z_i), sources_mc.T,
-                                  cfg.width_rad * DA_i)
+                                  cfg.width_rad)
     if bg["Count"] < 20:
         return i, None, None, None
 
