@@ -10,6 +10,47 @@ from scipy.stats import truncnorm as sp_truncnorm, norm as sp_norm, uniform as s
 from scipy.stats import gaussian_kde
 
 
+def _close_sampler_pool(sampler):
+    """Explicitly close/join a nautilus Sampler's worker pool(s).
+
+    Found 2026-09-05 on the Hypatia HPC campaign: nautilus's ``Sampler``
+    creates its ``multiprocessing.Pool`` inside ``__init__`` but exposes no
+    ``close``/``__del__``/context-manager API at all, and every
+    ``run_sampler*`` call site here called ``sampler.run(...)`` with no
+    ``try/finally`` -- so a ``sampler.run()`` exception (observed in
+    production: ``numpy.linalg.LinAlgError: Singular matrix`` deep inside
+    nautilus's own bound-construction code, a recurring numerical edge
+    case) left that attempt's pool workers running with nothing to tell
+    them to exit, while the next bootstrap retry spun up a *fresh* pool on
+    top -- confirmed live via `ps`: a single crashed-and-retried job had
+    two full 32-process pools (64 processes) alive simultaneously for what
+    should only ever be one 32-worker pool at a time. Call this from a
+    ``finally:`` block around every ``sampler.run(...)`` call so a crash
+    can never leak worker processes.
+
+    ``sampler.pool_l``/``sampler.pool_s`` are nautilus's own
+    ``NautilusPool`` wrappers (often the same object) around the
+    underlying ``multiprocessing.Pool`` created when an int was passed as
+    ``pool=`` -- always true for every call site in this module. Safe to
+    call unconditionally: no-ops if pool_l/pool_s are None (pool=None/1),
+    dedupes when pool_l is pool_s, and swallows cleanup errors so a
+    failure here never masks the original exception from ``sampler.run``.
+    """
+    seen = set()
+    for wrapper in (getattr(sampler, "pool_l", None), getattr(sampler, "pool_s", None)):
+        if wrapper is None or id(wrapper) in seen:
+            continue
+        seen.add(id(wrapper))
+        pool = getattr(wrapper, "pool", None)
+        if pool is None:
+            continue
+        try:
+            pool.close()
+            pool.join()
+        except Exception:
+            pass
+
+
 def cholog_gaussian(data_vectors, cov_matrices):
     """
     Simultaneous Gaussian log-likelihood for N data vectors of size k.
@@ -202,7 +243,10 @@ def run_sampler(
         )
 
     sampler = Sampler(prior, _loglike, n_live=n_live, pool=pool)
-    sampler.run(verbose=verbose)
+    try:
+        sampler.run(verbose=verbose)
+    finally:
+        _close_sampler_pool(sampler)
     return sampler  # gamma sampler
 
 
@@ -340,7 +384,10 @@ def run_sampler_mc(
         )
 
     sampler = Sampler(prior, _loglike, n_live=n_live, pool=pool)
-    sampler.run(verbose=verbose)
+    try:
+        sampler.run(verbose=verbose)
+    finally:
+        _close_sampler_pool(sampler)
     return sampler
 
 
@@ -672,7 +719,10 @@ def run_sampler_combined(
         n_live=n_live, pool=pool,
         filepath=filepath, resume=resume,
     )
-    converged = sampler.run(verbose=verbose, timeout=timeout)
+    try:
+        converged = sampler.run(verbose=verbose, timeout=timeout)
+    finally:
+        _close_sampler_pool(sampler)
     # nautilus returns False when stopped by timeout/n_like_max rather
     # than convergence.  Exposed as an attribute to keep the return
     # signature unchanged for existing callers.
@@ -900,7 +950,10 @@ def run_sampler_diemer(
         n_live=n_live, pool=pool,
         filepath=filepath, resume=resume,
     )
-    converged = sampler.run(verbose=verbose, timeout=timeout)
+    try:
+        converged = sampler.run(verbose=verbose, timeout=timeout)
+    finally:
+        _close_sampler_pool(sampler)
     sampler.converged   = bool(converged)
     sampler.param_order = param_order
     try:
@@ -1137,7 +1190,10 @@ def run_sampler_combined_resampled(
         n_live=n_live, pool=pool,
         filepath=filepath, resume=resume,
     )
-    converged = sampler.run(verbose=verbose, timeout=timeout)
+    try:
+        converged = sampler.run(verbose=verbose, timeout=timeout)
+    finally:
+        _close_sampler_pool(sampler)
     # nautilus returns False when stopped by timeout/n_like_max rather
     # than convergence.  Exposed as an attribute to keep the return
     # signature unchanged for existing callers.
