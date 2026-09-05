@@ -321,7 +321,7 @@ def des_y3_cluster_pdf(z, z_min=0.2, z_max=0.65):
     in_range = (z >= z_min) & (z <= z_max)
     pdf = np.where(in_range, z**2, 0.0)
     z_grid = np.linspace(z_min, z_max, 1000)
-    norm = np.trapz(z_grid**2, z_grid)
+    norm = np.trapezoid(z_grid**2, z_grid)
     return pdf / norm
 
 def sample_des_y3_cluster_z(N, rng, z_min=0.2, z_max=0.65):
@@ -342,7 +342,7 @@ def des_y3_source_pdf(z, alpha=2.0, beta=1.5, z0=0.4):
     z = np.atleast_1d(z).astype(float)
     pdf = np.where(z > 0, (z/z0)**alpha * np.exp(-(z/z0)**beta), 0.0)
     z_grid = np.linspace(1e-3, 5.0, 5000)
-    norm = np.trapz((z_grid/z0)**alpha * np.exp(-(z_grid/z0)**beta), z_grid)
+    norm = np.trapezoid((z_grid/z0)**alpha * np.exp(-(z_grid/z0)**beta), z_grid)
     return pdf / norm
 
 def sample_des_y3_source_z(N, rng, z_min=0.0, z_max=2.5,
