@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 
 from destacking.model import (
@@ -35,6 +37,19 @@ def _close_sampler_pool(sampler):
     call unconditionally: no-ops if pool_l/pool_s are None (pool=None/1),
     dedupes when pool_l is pool_s, and swallows cleanup errors so a
     failure here never masks the original exception from ``sampler.run``.
+
+    2026-09-05 follow-up: an initial version called ``pool.close()`` then
+    ``pool.join()`` directly and deadlocked production jobs almost
+    immediately -- ``ps`` showed the crashed/timed-out attempt's pool
+    workers gone (0 processes) but the main process then hanging forever
+    before spawning the next attempt's pool, a classic fork()-after-Pool
+    hazard (join()'s internal handler threads not fully unwound before the
+    next ``multiprocessing.Pool(32)`` forks). Root cause not fully pinned
+    down remotely, so cleanup now runs in a background daemon thread with
+    a hard wall-clock timeout: if the pool doesn't finish shutting down in
+    time, we abandon waiting and move on rather than risk hanging the
+    whole job again -- a leaked pool once in a while is a far smaller cost
+    than a full stall.
     """
     seen = set()
     for wrapper in (getattr(sampler, "pool_l", None), getattr(sampler, "pool_s", None)):
@@ -44,11 +59,17 @@ def _close_sampler_pool(sampler):
         pool = getattr(wrapper, "pool", None)
         if pool is None:
             continue
-        try:
-            pool.close()
-            pool.join()
-        except Exception:
-            pass
+
+        def _shutdown(p=pool):
+            try:
+                p.terminate()
+                p.join()
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_shutdown, daemon=True)
+        t.start()
+        t.join(timeout=10.0)
 
 
 def cholog_gaussian(data_vectors, cov_matrices):
