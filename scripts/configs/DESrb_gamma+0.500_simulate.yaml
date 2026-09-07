@@ -60,3 +60,13 @@ sim_n_radii:           6
 
 n_cov_bootstrap: 200
 
+# Shot-noise variance floor (2026-09-07, destacking/simulation.py commit
+# bd01faa): matches prepare_real_data.py's wazp_desy3_real_data_floor6.yaml
+# exactly (sigma_e is always shape_noise above, by construction). Simulated
+# inferences are meant to validate the exact code real data goes through;
+# this was the other real gap alongside the bin-structure mismatch --
+# without it, near-zero-variance 2-3-galaxy bins could let one cluster
+# dominate the whole joint likelihood (project memory
+# bootstrap-covariance-floor-bug, previously fixed for real data only).
+floor_rmax: 0.5
+
