@@ -365,6 +365,12 @@ SIGMA_OFF_MPC   = SIGMA_OFF_MPC_H / H_PLANCK
 
 DENSITY         = float(_cfg("density",     "DENSITY",     7.5,  cast=float))
 SHAPE_NOISE     = float(_cfg("shape_noise", "SHAPE_NOISE", 0.27, cast=float))
+# Shot-noise variance floor for the simulated measurement's bootstrap_signal
+# call (see destacking.simulation.SimulationConfig.floor_rmax's docstring) --
+# sigma_e is always cfg.shape_noise (see SIM_CFG below), so this key only
+# controls which bins get floored; None (default) floors every bin, matching
+# the real-data pipeline's own default when floor_rmax isn't set.
+FLOOR_RMAX      = _cfg("floor_rmax", "FLOOR_RMAX", None, cast=float)
 # Physical target aperture radius [Mpc] for the simulated source-injection
 # field -- destacking.simulation._process_cluster converts this to each
 # cluster's own angular half-width via ITS OWN DA(z), not a fixed
@@ -636,6 +642,7 @@ SIM_CFG = SimulationConfig(
     bin_limits=BIN_LIMITS,
     n_cov_bootstrap=N_COV_BOOTSTRAP,
     n_workers=N_WORKERS,
+    floor_rmax=FLOOR_RMAX,
 )
 
 

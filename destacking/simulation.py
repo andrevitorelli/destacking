@@ -417,6 +417,15 @@ class SimulationConfig:
     n_cov_bootstrap: int              # galaxy bootstrap draws per cluster
     # Execution
     n_workers: int = 15
+    # Shot-noise variance floor for bootstrap_signal (see _process_cluster's
+    # comment) -- None (default) disables it, matching legacy behaviour.
+    # Added 2026-09-07: simulated inferences are meant to be a final
+    # validation of the exact code used on real data (prepare_real_data.py
+    # already applies this floor), so the simulation pipeline should match
+    # it too -- boost correction is the one deliberate exception, since
+    # simulations have perfect knowledge of which galaxies are background
+    # sources and so have nothing to correct for.
+    floor_rmax: float = None
 
     @property
     def n_bins(self):
@@ -549,10 +558,16 @@ def _process_cluster(i):
     5. Measure from a possibly miscentered position (offset ``_OFF_MAG_MPC``
        at angle ``_PHI_MIS``) via ``metacal_cluster_lensing``.
     6. Estimate the per-cluster data vector and covariance with
-       ``bootstrap_signal`` — the same estimator for both, no boost
-       correction, no noise floor.  Bins that fail the bootstrap (too few
-       galaxies for a finite, positive variance) are NaN in the data vector
-       and are dropped from this cluster's likelihood by cholog_gaussian.
+       ``bootstrap_signal`` — the same estimator, same shot-noise variance
+       floor (``sigma_e=cfg.shape_noise``, ``floor_rmax=cfg.floor_rmax``) as
+       the real-data measurement (prepare_real_data.py), added 2026-09-07 so
+       a simulated inference validates the exact code path real data goes
+       through. No boost correction is the one deliberate difference:
+       simulations have perfect knowledge of which galaxies are background
+       sources, so there is nothing to correct for. Bins that fail the
+       bootstrap (too few galaxies for a finite, positive variance even
+       after the floor) are NaN in the data vector and are dropped from
+       this cluster's likelihood by cholog_gaussian.
 
     Reproducibility: every random stage uses ``_seed(g_idx, offset + i)``
     with disjoint offset blocks (1000 shapes, 4000 positions, 5000
@@ -723,13 +738,23 @@ def _process_cluster(i):
 
     # Stage 6 — data vector and covariance from the same bootstrap estimator
     # (signal(), no boost correction) so both are consistent with the NFW
-    # model in the likelihood, which also does not include a boost.
-    # bootstrap_signal handles failure per bin: bins without enough galaxies
-    # for a finite, positive bootstrap variance come back as NaN.  Those NaN
-    # entries stay in the data vector so cholog_gaussian drops exactly the
-    # failed bins from this cluster's likelihood — no noise floor anywhere.
+    # model in the likelihood, which also does not include a boost. No
+    # boost correction is the one deliberate difference from the real-data
+    # measurement (prepare_real_data.py): simulations have perfect
+    # knowledge of which galaxies are background sources, so there is
+    # nothing to correct for. Everything else uses the identical
+    # bootstrap_signal call, including the sigma_e/floor_rmax shot-noise
+    # variance floor (added 2026-09-07 -- see cfg.floor_rmax's docstring)
+    # so a simulated inference is a genuine validation of the same code
+    # path the real data goes through, not a different one that happens
+    # to look similar. bootstrap_signal handles failure per bin: bins
+    # without enough galaxies for a finite, positive bootstrap variance
+    # (post-floor) come back as NaN, and those NaN entries stay in the
+    # data vector so cholog_gaussian drops exactly the failed bins from
+    # this cluster's likelihood.
     sigmas, sigmas_cov, _, _ = bootstrap_signal(
-        stake, cfg.bin_limits, Nboot=cfg.n_cov_bootstrap
+        stake, cfg.bin_limits, Nboot=cfg.n_cov_bootstrap,
+        sigma_e=cfg.shape_noise, floor_rmax=cfg.floor_rmax,
     )
     valid_bins = np.isfinite(sigmas)
     if not valid_bins.any():
