@@ -1,0 +1,62 @@
+# HPC re-run (2026-09-07): DES-like conditions, true gamma = -0.167,
+# with the real WaZP+DES-Y3 pipeline's radial bin structure (see
+# sim_log_inner_radius comment below) instead of the original campaign's
+# 8-bin/-0.8 grid, to test whether that resolves DES's high crash rate.
+# Label "DESrb" (not "DES") keeps this fully separate from the original
+# campaign's untouched data/configs on disk.
+#
+# Simulation-only (inference:false) -- writes the checkpoint +
+# notebook-compat sim data (DESrb_gamma-0.167_g000_real_data.fits/_bgs.pkl under
+# ~/destacking_data/sims/) that BOTH the joint-fit stage (2/3) and the
+# stacked-analysis stage (3/3) read, guaranteeing they compare against the
+# identical simulated data (cluster_runs.md requirement).
+#
+# Usage: python scripts/gamma_inference.py scripts/configs/DESrb_gamma-0.167_simulate.yaml
+# (RUN_DIR set by the paired .slurm script, not here.)
+
+simulation: true
+inference:  false
+
+gamma_range: [-0.166667, -0.166667]
+n_gamma:     1
+n_workers:   32
+
+sim_prefix: "DESrb_gamma-0.167_g"
+
+n_clusters:      15967
+z_cluster_range: [0.10, 0.60]
+
+# Source survey — density measured directly from the real catalogue,
+# 2026-08-31: ~/destacking_data/real_data/metacal_filtered.npz has
+# 126,719,902 sources; HEALPix occupied-pixel footprint area converges to
+# ~5200-5290 deg^2 across nside=256/512/1024/2048 -> 6.7-6.8 gal/arcmin^2.
+density:     6.7
+shape_noise: 0.27
+smail_alpha: 2.0
+smail_beta:  1.5
+smail_z0:    0.4
+
+triaxiality:  true
+miscentering: true
+f_cen:           0.64
+sigma_off_mpc_h: 0.32
+
+# Radial grid matches the real WaZP+DES-Y3 pipeline's convention exactly
+# (wazp_real_data_floor6 / gamma_inference_diemer_production.yaml: 6 bins,
+# log_inner=-0.6) instead of the original campaign's 8-bin/-0.8 grid.
+# Found 2026-09-06: at -0.8 with this survey's low density (6.7/arcmin^2),
+# the 3 innermost of 8 bins were NaN (too few expected galaxies) for 86%,
+# 67%, and 40% of clusters respectively -- a highly heterogeneous per-
+# cluster valid-bin-count population (3-8 valid bins/cluster) that varies
+# between bootstrap resamples, a plausible driver of the campaign's high
+# DES crash rate (nautilus's minimum_volume_enclosing_ellipsoid hitting
+# numpy.linalg.LinAlgError: Singular matrix far more than on LSST or real
+# data). The real-data pipeline's narrower/coarser -0.6/6-bin grid keeps
+# 72% of clusters with all bins valid and only 27% NaN in just the
+# innermost bin, and that pipeline ran 50/50 bootstraps with 0 failures.
+sim_log_inner_radius: -0.6
+sim_log_outer_radius:  0.6
+sim_n_radii:           6
+
+n_cov_bootstrap: 200
+

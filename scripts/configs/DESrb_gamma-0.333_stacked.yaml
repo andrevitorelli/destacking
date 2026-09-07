@@ -1,0 +1,17 @@
+# HPC re-run (2026-09-07), STAGE 3/3 "stacked": DES-like conditions, true
+# gamma = -0.333, stacked-fit comparison on the SAME simulated data
+# stage 1 wrote (SLURM dependency ensures stage 1 completes first). The
+# stacked analysis's own radial binning (wazp_stacked_analysis.py's
+# 16-bin logspace(-0.8,0.6,16)) is unaffected by the bin-structure change
+# above -- it measures directly from the raw per-cluster source catalog,
+# not from the simulate stage's fixed-grid checkpoint -- but this stage
+# is re-run anyway so it consumes the SAME (re-simulated) data as the new
+# joint fit, per cluster_runs.md's identical-data requirement.
+#
+# Usage: python scripts/auxiliary_scripts/stacked_sim_analysis.py scripts/configs/DESrb_gamma-0.333_stacked.yaml
+
+sim_prefix: "DESrb_gamma-0.333_g"
+sims_dir:   "~/destacking_data/sims"
+output_dir: "/scratch/andrezvitorelli/data/output/DESrb_gamma-0.333_stacked"
+n_workers:  32
+use_cache:  false
