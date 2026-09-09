@@ -1,0 +1,17 @@
+# Joint-vs-stacked constraining-power comparison (2026-09-09): LSST-like
+# conditions, true gamma = +0.167, stacked-analysis cross-check on the
+# SAME simulated data the joint fit uses. Unchanged methodology from the
+# rest of the campaign (destacking.data.assign_stack_bins: 3 z-bins x 4
+# richness-bins x 2 Delta-m-bins, matching the notebooks/real-data
+# convention) -- build_cmr_fits' per-Delta-m-group mass-concentration
+# fit is the stacked-side comparison point for this test, since 2 groups
+# is too few to fit a continuous gamma slope (see build_cmr_fits/
+# build_pairs_c_M in wazp_stacked_analysis.py).
+#
+# Usage: python scripts/auxiliary_scripts/stacked_sim_analysis.py scripts/configs/LSSTrb_gamma+0.167_stacked.yaml
+
+sim_prefix: "LSSTrb_gamma+0.167_g"
+sims_dir:   "~/destacking_data/sims"
+output_dir: "/scratch/andrezvitorelli/data/output/LSSTrb_gamma+0.167_stacked"
+n_workers:  32
+use_cache:  false

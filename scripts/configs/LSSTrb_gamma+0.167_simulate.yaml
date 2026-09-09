@@ -1,0 +1,49 @@
+# Joint-vs-stacked constraining-power comparison (2026-09-09): LSST-like
+# conditions, true gamma = +0.167, simulated with the SAME real-data-
+# matching radial-bin structure and shot-noise floor as DESrb (see
+# DESrb_gamma+0.167_simulate.yaml / destacking/simulation.py commit
+# bd01faa), for methodological parity between the two surveys in this
+# comparison -- distinct label "LSSTrb" from the completed LSST campaign
+# (8-bin, floor active but untested there) so this doesn't collide with
+# that already-reported data.
+#
+# Usage: python scripts/gamma_inference.py scripts/configs/LSSTrb_gamma+0.167_simulate.yaml
+# (RUN_DIR set by the paired .slurm script, not here.)
+
+simulation: true
+inference:  false
+
+gamma_range: [0.167, 0.167]
+n_gamma:     1
+n_workers:   32
+
+sim_prefix: "LSSTrb_gamma+0.167_g"
+
+n_clusters:      80000
+z_cluster_range: [0.10, 0.60]
+
+# density=30 gal/arcmin^2 (close to LSST DESC Y10 SRD gold-sample density
+# of 27, Mandelbaum+2018); n(z) = LSST Y10 SRD Smail form, verified to
+# give <z>~1.04 matching the literature.
+density:     30.0
+shape_noise: 0.27
+smail_alpha: 2.0
+smail_beta:  0.68
+smail_z0:    0.11
+
+triaxiality:  true
+miscentering: true
+f_cen:           0.64
+sigma_off_mpc_h: 0.32
+
+# Real-data pipeline's radial grid (wazp_desy3_real_data_floor6.yaml),
+# matching DESrb for parity in this comparison.
+sim_log_inner_radius: -0.6
+sim_log_outer_radius:  0.6
+sim_n_radii:           6
+
+n_cov_bootstrap: 200
+
+# Shot-noise variance floor, matching the real-data pipeline exactly
+# (destacking/simulation.py commit bd01faa).
+floor_rmax: 0.5
