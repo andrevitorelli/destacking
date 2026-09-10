@@ -196,7 +196,17 @@ def main():
         cfg, "output_dir", f"~/destacking_data/output/stacked3/{sim_prefix}",
     ))
     os.makedirs(output_dir, exist_ok=True)
-    wsa.NWORKERS = _cfg(cfg, "n_workers", 32, cast=int)
+    wsa.NWORKERS  = _cfg(cfg, "n_workers", 32, cast=int)
+    wsa.USE_CACHE = _cfg(cfg, "use_cache", True, cast=bool)
+    # Redirect every wsa output-path global into our own output_dir --
+    # otherwise build_stack_fits() (reused unmodified) writes its running
+    # checkpoint to the real-data path, which doesn't exist on the compute
+    # node. Same mechanism stacked_sim_analysis.py already uses.
+    wsa.STACKS_PKL = os.path.join(output_dir, "stacks3.pkl")
+    wsa.FITS_PKL   = os.path.join(output_dir, "fits3.pkl")
+    wsa.ML_PKL     = os.path.join(output_dir, "ml_fits3.pkl")
+    wsa.CMR_PKL    = os.path.join(output_dir, "cmr_fits3.pkl")
+    wsa.BOOST_PKL  = os.path.join(output_dir, "boost_fits3.pkl")
     n_draws = 1000
     min_n_for_fit = wsa.MIN_N_FOR_FIT
 
