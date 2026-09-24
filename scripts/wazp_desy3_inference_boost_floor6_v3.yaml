@@ -1,0 +1,73 @@
+# Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
+# prepare_real_data.py (wazp_desy3_real_data_floor6.yaml) into
+# /home/andre/destacking_data/real_data/wazp_real_data_floor6/simulation_g00_gamma+0.0/.
+#
+# Variant of wazp_desy3_inference_boost_floor.yaml with 6 radial bins
+# instead of 8 (same log_inner/outer range, see
+# wazp_desy3_real_data_floor6.yaml) -- wider bins give more galaxies per
+# bin, complementing the sigma_e covariance floor. r_min_fit stays at 0:
+# every bin still reaches the fit, this only changes how coarsely the
+# radial range is binned.
+#
+# v3 vs v2: widens alpha_mr/beta_mr/log_M_norm priors from scale
+# 0.5/0.3/0.3 to scale 3.0 each (same loc). Those scales were only
+# ~6-15x the parameters' own posterior widths -- meaningfully shrinking
+# the fit toward McClintock+19's own central values (loc=1.356/-0.30),
+# which undermines using this fit as an independent check against that
+# same paper for alpha_Mlambda/beta_Mlambda. gamma_cm's prior
+# (scale=10.5, ~300-500x its own posterior width) was already this wide;
+# this just brings alpha_mr/beta_mr/log_M_norm to the same standard.
+# Still a proper Gaussian (not flat), avoiding boundary/edge pathologies.
+# alpha_cm/beta_cm/c0 (mass-concentration, not mass-richness) are
+# unchanged -- out of scope for this widening.
+#
+# gamma_true=0.0 here is NOT a truth value — real clusters have no known
+# gamma. It is a pure directory-naming/metadata label (see
+# prepare_real_data.py's module docstring): read off gamma_est/sigma_gamma
+# and ignore every "bias"/"gamma_true_ols" column in the reports, since
+# there is no truth to compare against.
+#
+# Usage: python gamma_inference.py wazp_desy3_inference_boost_floor6_v3.yaml
+
+# ═══ Run phases ═══════════════════════════════════════════════════════════
+simulation: false
+inference:  true
+data_folder: /home/andre/destacking_data/real_data/wazp_real_data_floor6_v2
+
+# Per-cluster boost correction — boost_powerlaw_at_R evaluates the fitted
+# analytic B0/Rs/alpha model at whatever radii are passed in, so the
+# existing 24 stack fits (from the 8-bin stacked profiles) are still valid
+# to evaluate at this run's 6-bin RADII_fit — no need to rerun Stage 2b.
+boosts: /home/andre/destacking_data/real_data/wazp_boost_fits.pkl
+
+# ═══ Scan (shared) ════════════════════════════════════════════════════════
+gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0
+n_gamma:     1
+n_workers:   12
+
+n_clusters: 15967   # cosmetic only (report/plot titles) — the actual
+                    # bootstrap draw size follows the loaded data (n_data)
+
+# ═══ INFERENCE phase ══════════════════════════════════════════════════════
+bootstrap:   true
+n_bootstrap: 50
+timeout:     7200
+
+# Inference-only mode requires the fit radial grid explicitly — MUST match
+# the grid prepare_real_data.py measured on (log_inner_radius/log_outer_radius/
+# n_radii in wazp_desy3_real_data_floor6.yaml).
+fit_log_inner_radius: -0.6
+fit_log_outer_radius:  0.6
+fit_n_radii:           6
+r_min_fit:             0.0   # every bin reaches the fit
+
+fit_params:
+  c0:           {fit: true, prior: gaussian, loc: 4.5,   scale: 3.0}
+  alpha_cm:     {fit: true, prior: gaussian, loc: -0.088, scale: 0.3}
+  beta_cm:      {fit: true, prior: gaussian, loc: -0.4,  scale: 1.5}
+  gamma_cm:     {fit: true, prior: gaussian, loc: 0.0,   scale: 10.5}
+  log_M_norm:   {fit: true, prior: gaussian, loc: 0.0,   scale: 3.0}
+  alpha_mr:     {fit: true, prior: gaussian, loc: 1.356, scale: 3.0}
+  beta_mr:      {fit: true, prior: gaussian, loc: -0.30, scale: 3.0}
+  f_mis:        {fit: true, prior: flat, lo: 0.0, hi: 1.0}
+  sigma_off:    {fit: true, prior: flat, lo: 0.0, hi: 1.0}

@@ -181,9 +181,12 @@ def overlay_priors_on_corner(fig, param_order, priors, color="darkorange"):
     """Draw each sampled parameter's prior pdf on the diagonal (1D) panel
     of an already-built ``corner.corner`` figure, on the same probability-
     density scale as the posterior histogram — for that to be a fair
-    comparison, the figure must have been built with
-    ``hist_kwargs={'density': True}`` (both plot_combined_corner and
-    gamma_inference.run_one_bootstrap's per-fit corner plot do this).
+    comparison, the figure must be on a true density scale: either built
+    with ``hist_kwargs={'density': True}`` (unsmoothed 1D panels; both
+    gamma_inference.run_one_bootstrap's per-fit corner plot and
+    plot_combined_corner with smooth1d=None do this), or, when
+    ``smooth1d`` is set, manually renormalised to integrate to 1 (see
+    plot_combined_corner, which does this itself before calling here).
 
     Diagonal axes of an N-parameter corner.corner figure sit at
     ``fig.axes[i*N + i]`` for i in range(N) (row-major N x N grid; the
@@ -238,7 +241,8 @@ def overlay_priors_on_corner(fig, param_order, priors, color="darkorange"):
 
 def plot_combined_corner(samples, weights, param_order, out_path,
                          labels=None, truths=None, gamma_true=None,
-                         n_bootstrap=None, n_clusters=None, priors=None):
+                         n_bootstrap=None, n_clusters=None, priors=None,
+                         smooth1d=None, plot_range=None):
     """Corner plot of the MIXTURE posterior over every fit parameter,
     pooling samples from all bootstrap fits of one gamma point (equal
     weight per bootstrap, matching the gamma-only combination).
@@ -254,10 +258,25 @@ def plot_combined_corner(samples, weights, param_order, out_path,
         Column names of ``samples``, in order.
     labels, truths : list or None
         Passed straight to ``corner.corner`` (axis labels, truth-value
-        lines); default to ``param_order`` names and no truth lines.
+        lines); default to ``param_order`` names and no truth lines. Pass
+        ``truths=None`` (and ``gamma_true=None``, to also drop it from the
+        title) for real data, which has no injected truth.
     priors : dict[str, scipy.stats distribution] or None
         When given, each sampled parameter's prior pdf is overlaid on its
         1D diagonal panel (see ``overlay_priors_on_corner``).
+    smooth1d : bool or None
+        When truthy, each 1D diagonal panel is a proper weighted Gaussian
+        KDE (``scipy.stats.gaussian_kde``, Scott's rule) instead of a
+        histogram -- a genuinely smooth curve, not just height-smoothed
+        bins (corner's own ``smooth1d=`` still renders a stairstep, which
+        does not look smooth for panels with many/noisily-weighted
+        samples). ``None``/``False`` (default) leaves the plain
+        (unsmoothed) histogram, matching prior behaviour.
+    plot_range : list or None
+        Per-parameter ``(lo, hi)`` tuples (or corner.corner-style
+        fraction floats) forwarded as ``range=`` to ``corner.corner``;
+        ``None`` (default) uses the full sample range, which can be much
+        wider than the contours when the posterior has long tails.
 
     Returns the output path, or None if the ``corner`` package is
     unavailable or plotting fails (caught, not raised — a missing plot
@@ -268,6 +287,12 @@ def plot_combined_corner(samples, weights, param_order, out_path,
     except ImportError:
         return None
     try:
+        # Always let corner draw the plain (unsmoothed) histogram itself
+        # (smooth1d=None keeps its ax.hist()/density=True branch, which is
+        # the only one that supports hist_kwargs={"density": True}
+        # directly) -- when smoothing is requested, that histogram outline
+        # is deleted below and replaced with a genuine weighted KDE curve,
+        # which is already a proper density (no renormalisation needed).
         fig = _corner.corner(
             samples, weights=weights,
             labels=labels if labels is not None else list(param_order),
@@ -278,10 +303,33 @@ def plot_combined_corner(samples, weights, param_order, out_path,
             plot_datapoints=False, fill_contours=True,
             levels=(0.39, 0.86),
             smooth=1.0,
+            smooth1d=None,
+            range=plot_range,
             hist_kwargs={"density": True},
         )
+        if smooth1d:
+            from scipy.stats import gaussian_kde
+            k = len(param_order)
+            for i in range(k):
+                ax = fig.axes[i * k + i]
+                hist_color = "black"
+                if ax.patches:
+                    hist_color = ax.patches[0].get_edgecolor()
+                    for p in list(ax.patches):
+                        p.remove()
+                x = samples[:, i]
+                finite = np.isfinite(x)
+                kde = gaussian_kde(x[finite], weights=weights[finite])
+                xlo, xhi = ax.get_xlim()
+                xgrid = np.linspace(xlo, xhi, 400)
+                y = kde(xgrid)
+                ax.plot(xgrid, y, color=hist_color, lw=1.3)
+                ax.set_xlim(xlo, xhi)
+                ax.set_ylim(0, y.max() * 1.1)
         if priors:
             overlay_priors_on_corner(fig, param_order, priors)
+        for ax in fig.axes:
+            ax.tick_params(direction="in", which="both")
         title_bits = []
         if gamma_true is not None:
             title_bits.append(rf"$\gamma_{{\rm true}}={gamma_true:+.3f}$")

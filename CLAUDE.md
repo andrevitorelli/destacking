@@ -62,4 +62,4 @@ bins_lims = np.array([[bins_lims[i], bins_lims[i+1]] for i in range(N)])
 
 ## Key result (from the original prototype)
 
-Stacking 500 clusters gives σ(logM)≈0.06, σ(c)≈1.5. Joint (destacking) fitting of the same 500 individual profiles gives σ(logM)≈0.03, σ(c)≈1.1 — roughly 2× tighter constraints. The current real-data result (WaZP+DES-Y3, boost- and floor-corrected) is `alpha_cm=+0.076 (+0.075/-0.071)`; see `reports/2026-07-26_boost_factors_variance_floor_alpha_cm.tex`.
+Stacking 500 clusters gives σ(logM)≈0.06, σ(c)≈1.5. Joint (destacking) fitting of the same 500 individual profiles gives σ(logM)≈0.03, σ(c)≈1.1 — roughly 2× tighter constraints. The current real-data result (WaZP+DES-Y3, boost- and floor-corrected, run_2026-09-23T13-12-14) is `alpha_cm=+0.095 (+0.080/-0.080)`, `gamma_cm=+0.027 (+0.034/-0.028)`; see `reports/2026-07-26_boost_factors_variance_floor_alpha_cm.tex` (superseded numerically by this later run — the run backing that report's own numbers turned out to predate the boost/floor fixes despite its config naming, see `project_wazp_desy3_alpha_cm_anomaly`-adjacent memory).

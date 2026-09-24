@@ -318,6 +318,24 @@ else:
 # the data products but excluded from the likelihood).
 R_MIN_FIT   = float(_cfg("r_min_fit", "R_MIN_FIT", 0.5, cast=float))
 
+# Optional per-cluster boost correction: 'boosts: <path>' points at a
+# wazp_stacked_analysis.py Stage 2b boost_fits pickle (data/wazp_boost_fits.pkl),
+# keyed by stack name ("z{i}_ng{j}_dm{k}"), each a
+# {B0, Rs, alpha, ...} cluster_toolkit.boostfactors.boost_powerlaw_at_R fit.
+# Ported from gamma_inference.py (this script forked before that feature
+# was added there and never received it) so the Diemer19-baseline fit can
+# use the same boost-corrected real-data measurement as the combined-model
+# production run. See gamma_inference.py's own comment on this block for
+# the full rationale.
+BOOSTS_FILE = _cfg("boosts", "BOOSTS_FILE", None)
+if BOOSTS_FILE is not None:
+    with open(BOOSTS_FILE, "rb") as _bf:
+        import pickle as _pickle
+        _boost_data = _pickle.load(_bf)
+    BOOST_FITS = _boost_data["boost_fits"]
+else:
+    BOOST_FITS = None
+
 _Z_CL_RANGE              = _cfg("z_cluster_range", None, [0.10, 0.60])
 DES_Y3_Z_CLUSTER_RANGE = (float(_Z_CL_RANGE[0]), float(_Z_CL_RANGE[1]))
 WAZP_LOGM_RANGE        = (14.0, 15.0)
@@ -865,6 +883,55 @@ def simulate_one_gamma(g_idx, gamma_true, sim_subdir):
 
 # ── Inference phase ───────────────────────────────────────────────────────────
 
+def _apply_boost_correction(cluster_obs, data_vectors_fit, cov_matrices_fit,
+                            RADII_fit):
+    """Multiply each cluster's data vector/covariance by its stack's fitted
+    boost(R), from BOOST_FITS (loaded from the `boosts:` config path).
+    Clusters with no stack_name (outside every z/richness/delta_m bin, or
+    a checkpoint predating stack labelling) are left uncorrected — flagged
+    once via a summary count, not per-cluster, to keep the log readable.
+
+    Ported verbatim from gamma_inference.py — see that script's copy for
+    the full rationale comment."""
+    from cluster_toolkit.boostfactors import boost_powerlaw_at_R
+
+    if "stack_name" not in cluster_obs.colnames:
+        print("    WARNING: boosts requested but this checkpoint's "
+              "cluster_obs has no 'stack_name' column (predates "
+              "prepare_real_data.py's stack labelling) — no boost "
+              "correction applied to any cluster", flush=True)
+        return data_vectors_fit, cov_matrices_fit
+
+    stack_names = np.asarray(cluster_obs["stack_name"])
+    data_vectors_fit = data_vectors_fit.copy()
+    cov_matrices_fit = cov_matrices_fit.copy()
+
+    n_corrected, n_missing_stack, n_unknown_stack = 0, 0, 0
+    boost_cache = {}
+    for i, name in enumerate(stack_names):
+        if not name:
+            n_missing_stack += 1
+            continue
+        fit = BOOST_FITS.get(name)
+        if fit is None or fit.get("failed"):
+            n_unknown_stack += 1
+            continue
+        boost_vec = boost_cache.get(name)
+        if boost_vec is None:
+            boost_vec = boost_powerlaw_at_R(
+                RADII_fit, fit["B0"], fit["Rs"], fit["alpha"],
+            )
+            boost_cache[name] = boost_vec
+        data_vectors_fit[i] *= boost_vec
+        cov_matrices_fit[i] *= np.outer(boost_vec, boost_vec)
+        n_corrected += 1
+
+    print(f"    boost correction applied: {n_corrected:,} clusters "
+          f"({n_missing_stack:,} no stack, {n_unknown_stack:,} stack not "
+          f"in {BOOSTS_FILE!r})", flush=True)
+    return data_vectors_fit, cov_matrices_fit
+
+
 def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
     """Inference phase for one gamma: read the checkpointed data from
     ``data_subdir``, run N_BOOTSTRAP bootstrap nautilus fits, and combine
@@ -897,6 +964,11 @@ def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
     RADII_fit        = FIT_RADII[keep]
     data_vectors_fit = data_vectors[:, keep]
     cov_matrices_fit = cov_matrices[:, keep][:, :, keep]
+
+    if BOOST_FITS is not None:
+        data_vectors_fit, cov_matrices_fit = _apply_boost_correction(
+            cluster_obs, data_vectors_fit, cov_matrices_fit, RADII_fit,
+        )
 
     # ── Bootstrap loop ───────────────────────────────────────────────────────
     load_phase_dur = time.time() - gamma_t0   # wall time for data loading
