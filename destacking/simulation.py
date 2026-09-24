@@ -10,7 +10,9 @@ from destacking.relations import (
 
 # McClintock+18 pivot constants (mirrored for inversion in make_test_data)
 _LOG10_LAMBDA0 = np.log10(40.0)
-_LOG10_Z0      = np.log10(0.35)
+_LOG10_Z0      = np.log10(1.0 + 0.35)   # (1+z) form, matches
+#                                        relations.mass_lambda_McClintock18
+#                                        (changed 2026-09-24)
 _LOG10_M0      = 14.489
 _F_LAMBDA      = 1.356
 _G_Z           = -0.30
@@ -285,7 +287,7 @@ def make_test_data(
 
     # Richness: invert McClintock+18 on the true mass, then Poisson scatter
     logLambda_true = (
-        (np.log10(M) - _LOG10_M0 - _G_Z * (np.log10(z) - _LOG10_Z0))
+        (np.log10(M) - _LOG10_M0 - _G_Z * (np.log10(1.0 + z) - _LOG10_Z0))
         / _F_LAMBDA + _LOG10_LAMBDA0
     )
     Lambda_true = 10.0 ** logLambda_true

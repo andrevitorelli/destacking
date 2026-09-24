@@ -109,10 +109,18 @@ def mass_lambda_McClintock18(Lambda, z, Flambda=1.356, Gz=-0.30):
   """
   #pivots
   log10Lambda0 = np.log10(40)
-  log10z0 = np.log10(0.35)
+  log10z0 = np.log10(1.0 + 0.35)
   log10M0 = 14.489
 
-  mlog10M200 = log10M0 + Flambda*(np.log10(Lambda)-log10Lambda0) + Gz*(np.log10(z) - log10z0)
+  # Redshift evolution is in log10((1+z)/(1+z_piv)), matching McClintock+18's
+  # own ((1+z)/1.35)^Gz parametrisation (and the mass-concentration relation
+  # in destacking.model, which always used the (1+z) form). Changed
+  # 2026-09-24: this previously used log10(z) - log10(0.35), which made the
+  # fitted Gz/beta_mr a d(logM)/d(log z) slope and therefore NOT directly
+  # comparable to published (1+z)-form calibrations.
+  mlog10M200 = (log10M0
+                + Flambda*(np.log10(Lambda) - log10Lambda0)
+                + Gz*(np.log10(1.0 + z) - log10z0))
 
   return mlog10M200
 
