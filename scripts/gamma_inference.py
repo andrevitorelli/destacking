@@ -1051,6 +1051,17 @@ def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
     truth, ols, cluster_obs, data_vectors, cov_matrices = \
         load_simulation_checkpoint(data_subdir)
 
+    # Two-halo rule (2026-09-26): real data contain the two-halo signal, the
+    # simulations (isolated haloes) do not, so the model must match.  Real-data
+    # checkpoints (prepare_real_data.py) carry no truth coefficients (ols={}).
+    _is_real = not ols
+    if TWO_HALO != _is_real:
+        raise RuntimeError(
+            f"two_halo={TWO_HALO} but {data_subdir} is "
+            f"{'REAL' if _is_real else 'SIMULATED'} data: real-data fits must "
+            "set two_halo: true, simulated-data fits must not."
+        )
+
     if data_vectors.shape[1] != len(FIT_RADII):
         raise RuntimeError(
             f"radial-bin mismatch: data in {data_subdir} has "
