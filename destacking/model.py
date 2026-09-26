@@ -153,6 +153,35 @@ def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
     return out['Signal'] - out['Two-halo term']
 
 
+def _nfw_components(z, M200m, C200m, radii, SIGMA_OFF=None):
+    """Centered and miscentered one-halo NFW ΔΣ, returned separately.
+
+    Same physics as ``_nfw_profiles`` (xlensing's NFW + Rayleigh
+    miscentering table, no BCG) but (i) skips the two-halo term, which
+    ``_nfw_profiles`` computes only to subtract it again (~half of its
+    cost), and (ii) keeps the two components apart so a caller can mix
+    them at the likelihood level, per cluster, instead of mixing the
+    profiles.  ``(1-f)*centered + f*miscentered`` reproduces
+    ``_nfw_profiles(..., FMISS=f, SIGMA_OFF=...)`` with BCG_B_MASS=0.
+
+    Returns
+    -------
+    centered, miscentered : ndarray (N, M) each, in M_sun/pc².
+    """
+    xm = xlensing.model
+    z = np.asarray(z, dtype=float)
+    M200m = np.asarray(M200m, dtype=float)
+    C200m = np.asarray(C200m, dtype=float)
+    if SIGMA_OFF is None:
+        SIGMA_OFF = np.full(len(z), 0.1)
+    rs   = xm.r_vir_m(z, M200m) / C200m
+    fact = 2 * rs * xm.NFW_delta_c(C200m) * xm.cosmo.rhoM(z) / 1e12
+    X    = radii[np.newaxis, :] / rs[:, np.newaxis]
+    centered    = fact[:, None] * (xm.SigBar(X) - xm.SigX(X))
+    miscentered = fact[:, None] * xm.Delta_Sigma_NFW_off_x(X, np.asarray(SIGMA_OFF) / rs)
+    return centered, miscentered
+
+
 # ---------------------------------------------------------------------------
 # Forward model
 # ---------------------------------------------------------------------------

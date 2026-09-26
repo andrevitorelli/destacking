@@ -327,3 +327,19 @@ def test_forward_model_diemer_nan_delta_m_falls_back_to_ref():
     p_nan = forward_model_diemer(0.5, cluster_obs_nan, RADII)
     p_ref = forward_model_diemer(0.5, cluster_obs_ref, RADII)
     np.testing.assert_allclose(p_nan, p_ref, rtol=1e-10)
+
+
+def test_nfw_components_reproduce_nfw_profiles():
+    """(1-f)*centered + f*miscentered from _nfw_components must equal the
+    one-halo mixture _nfw_profiles returns (no BCG)."""
+    from destacking.model import _nfw_components, _nfw_profiles
+    rng = np.random.default_rng(3)
+    n = 50
+    z = rng.uniform(0.1, 0.7, n)
+    M = 10 ** rng.uniform(13.5, 15.2, n)
+    c = rng.uniform(1.5, 10.0, n)
+    f = rng.uniform(0.0, 1.0, n)
+    so = rng.uniform(0.05, 1.0, n)
+    ref = _nfw_profiles(z, M, c, RADII, FMISS=f, SIGMA_OFF=so)
+    cen, mis = _nfw_components(z, M, c, RADII, SIGMA_OFF=so)
+    np.testing.assert_allclose((1 - f)[:, None] * cen + f[:, None] * mis, ref, rtol=1e-12)
