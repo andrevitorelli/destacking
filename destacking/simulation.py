@@ -226,6 +226,7 @@ def make_test_data(
     noise_floor=0.01,
     poisson_richness=True,
     seed=None,
+    sigma_lnlambda_intr=0.0,
 ):
     """
     Build synthetic observed profiles and covariances from a truth catalog.
@@ -254,6 +255,12 @@ def make_test_data(
         estimate mass and Poisson scatter introduces an errors-in-variables
         bias.
     seed : int or None
+    sigma_lnlambda_intr : float
+        Lognormal intrinsic scatter in ln(Λ) at fixed mass, applied to the
+        deterministic inversion BEFORE any Poisson scatter.  Default 0.0
+        draws nothing, so the random stream (and every existing
+        simulation) is unchanged.  Added 2026-09-26 to test the joint
+        fit's deterministic Λ→M assumption.
 
     Returns
     -------
@@ -291,6 +298,9 @@ def make_test_data(
         / _F_LAMBDA + _LOG10_LAMBDA0
     )
     Lambda_true = 10.0 ** logLambda_true
+    if sigma_lnlambda_intr > 0.0:
+        Lambda_true = Lambda_true * np.exp(
+            rng.normal(0.0, sigma_lnlambda_intr, N))
     if poisson_richness:
         Lambda_obs = rng.poisson(Lambda_true).astype(float)
         Lambda_obs = np.maximum(Lambda_obs, 1.0)   # at least 1 to keep log finite
@@ -428,6 +438,10 @@ class SimulationConfig:
     # simulations have perfect knowledge of which galaxies are background
     # sources and so have nothing to correct for.
     floor_rmax: float = None
+    # Lognormal intrinsic scatter in ln(Lambda) at fixed mass, applied in
+    # the selection draw (build_truth_catalog -> make_test_data).  0.0
+    # (default) reproduces every existing simulation exactly.
+    sigma_lnlambda_intr: float = 0.0
 
     @property
     def n_bins(self):
@@ -460,6 +474,7 @@ def build_truth_catalog(gamma_true, g_idx, cfg):
         cluster_obs_b, _, _ = make_test_data(
             truth_b, cfg.radii, poisson_richness=True,
             seed=_seed(g_idx, 50_000 + batch),
+            sigma_lnlambda_intr=cfg.sigma_lnlambda_intr,
         )
         truth_b["Lambda"] = cluster_obs_b["Lambda"]
         keep = ((truth_b["Lambda"]  > cfg.lambda_min)
@@ -490,6 +505,33 @@ def build_truth_catalog(gamma_true, g_idx, cfg):
         "alpha_true":     float(coeffs[1]),
         "beta_true":      float(coeffs[2]),
         "gamma_true_ols": float(coeffs[3]),
+    }
+
+
+def mass_richness_truth(M_halo, Lambda, z, lambda_piv=40.0, z_piv=0.35):
+    """Effective mass-richness relation of a simulated sample.
+
+    OLS of log10 M on log10(Λ/λ_piv) and log10((1+z)/(1+z_piv)), i.e. the
+    <log10 M | Λ, z> the joint fit's forward model targets.  With intrinsic
+    or Poisson richness scatter this differs from the injected McClintock+18
+    inversion (the mass function and the Λ cut shift <M|Λ>), so it -- not
+    the injected slopes -- is the truth to compare mass-richness posteriors
+    against.  Returns log10M0 (at the pivots), alpha_mr, beta_mr and the
+    residual scatter sigma_log10M (dex).
+    """
+    logM = np.log10(np.asarray(M_halo, dtype=float))
+    X = np.column_stack([
+        np.ones(len(logM)),
+        np.log10(np.asarray(Lambda, dtype=float) / lambda_piv),
+        np.log10((1.0 + np.asarray(z, dtype=float)) / (1.0 + z_piv)),
+    ])
+    coeffs, *_ = np.linalg.lstsq(X, logM, rcond=None)
+    resid = logM - X @ coeffs
+    return {
+        "logM0_mr_true":       float(coeffs[0]),
+        "alpha_mr_true":       float(coeffs[1]),
+        "beta_mr_true":        float(coeffs[2]),
+        "sigma_log10M_lambda": float(np.std(resid)),
     }
 
 

@@ -141,6 +141,7 @@ from destacking.simulation import (
     make_test_data,
     compute_miscentering as _sim_compute_miscentering,
     compute_triaxial_shapes,
+    mass_richness_truth,
     simulate_lensing as _sim_simulate_lensing,
 )
 from destacking.utils import (
@@ -371,6 +372,19 @@ SHAPE_NOISE     = float(_cfg("shape_noise", "SHAPE_NOISE", 0.27, cast=float))
 # controls which bins get floored; None (default) floors every bin, matching
 # the real-data pipeline's own default when floor_rmax isn't set.
 FLOOR_RMAX      = _cfg("floor_rmax", "FLOOR_RMAX", None, cast=float)
+
+# Richness scatter (added 2026-09-26, to test the joint fit's deterministic
+# Lambda->M assumption).  sigma_lnlambda_intr: lognormal intrinsic scatter in
+# ln(Lambda) at fixed mass, applied before the Poisson draw used for the
+# Lambda>lambda_min selection.  fit_observed_richness: if true, the fit (and
+# the notebook-compatible catalogue used by the stacked analysis) sees that
+# scattered, selected richness; if false (default, legacy) both see the
+# deterministic McClintock+18 inversion of the true mass, i.e. no scatter at
+# all.  Defaults reproduce every existing simulation exactly.
+SIGMA_LNLAMBDA_INTR   = float(_cfg("sigma_lnlambda_intr", "SIGMA_LNLAMBDA_INTR",
+                                   0.0, cast=float))
+FIT_OBSERVED_RICHNESS = _yaml_bool(_cfg("fit_observed_richness",
+                                        "FIT_OBSERVED_RICHNESS", False))
 # Physical target aperture radius [Mpc] for the simulated source-injection
 # field -- destacking.simulation._process_cluster converts this to each
 # cluster's own angular half-width via ITS OWN DA(z), not a fixed
@@ -643,6 +657,7 @@ SIM_CFG = SimulationConfig(
     n_cov_bootstrap=N_COV_BOOTSTRAP,
     n_workers=N_WORKERS,
     floor_rmax=FLOOR_RMAX,
+    sigma_lnlambda_intr=SIGMA_LNLAMBDA_INTR,
 )
 
 
@@ -701,10 +716,15 @@ def _param_truths(param_order, ols, gamma_true):
         truths[param_order.index("alpha_cm")] = float(ols.get("alpha_true", np.nan))
     if "beta_cm" in param_order:
         truths[param_order.index("beta_cm")] = float(ols.get("beta_true", np.nan))
+    # Mass-richness: the sample's effective relation when the checkpoint
+    # records it (sims from 2026-09-26 on), else the injected McClintock+18
+    # values (identical for the legacy deterministic-richness sims).
     if "alpha_mr" in param_order:
-        truths[param_order.index("alpha_mr")] = 1.356
+        truths[param_order.index("alpha_mr")] = float(ols.get("alpha_mr_true", 1.356))
     if "beta_mr" in param_order:
-        truths[param_order.index("beta_mr")] = -0.30
+        truths[param_order.index("beta_mr")] = float(ols.get("beta_mr_true", -0.30))
+    if "log_M_norm" in param_order and "logM0_mr_true" in ols:
+        truths[param_order.index("log_M_norm")] = float(ols["logM0_mr_true"]) - 14.489
     if "f_mis" in param_order:
         truths[param_order.index("f_mis")]     = 1.0 - F_CEN
         truths[param_order.index("sigma_off")] = SIGMA_OFF_MPC
@@ -933,6 +953,18 @@ def simulate_one_gamma(g_idx, gamma_true, sim_subdir):
     cluster_obs, _, _ = make_test_data(
         truth, SIM_RADII, fractional_noise=0.2,
         poisson_richness=False, seed=_seed(g_idx, 1),
+    )
+    if FIT_OBSERVED_RICHNESS:
+        cluster_obs["Lambda"] = np.asarray(truth["Lambda"], dtype=float)
+    # Effective <log M | Lambda, z> of the richness the fit actually sees --
+    # the mass-richness truth once richness carries scatter.
+    ols.update(mass_richness_truth(truth["M_halo"], cluster_obs["Lambda"],
+                                   truth["z"]))
+    print(
+        f"    M|Lambda truth: log10M0={ols['logM0_mr_true']:.3f}, "
+        f"alpha_mr={ols['alpha_mr_true']:.3f}, beta_mr={ols['beta_mr_true']:.3f}, "
+        f"sigma_log10M={ols['sigma_log10M_lambda']:.3f} dex",
+        flush=True,
     )
 
     print("  saving simulation checkpoint ...", flush=True)
