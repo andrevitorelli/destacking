@@ -18,6 +18,16 @@ distribution of every member's (λ, z, Δm) therefore enters, and the
 measurement uncertainty enters through each stack's bootstrap covariance.
 The only difference from the joint fit is that the data are stacked.
 
+Two-halo rule (as in gamma_inference.py): --data real includes the two-halo
+term, which real data contain; --data sim omits it, because the simulations
+shear sources with isolated haloes only.
+
+Minimum stack size: each stack's covariance is a cluster bootstrap over its
+N members, so it has rank <= N-1; with 16 radial bins a 10-cluster stack's
+covariance is singular and its inverse dominates the whole likelihood (found
+2026-09-26: five N=10 stacks carried 37,000 of a 37,789 chi^2 at truth on
+the DES-like simulation).  --min-n defaults to 50 and must be >= 2 x bins.
+
 Inputs: the stacked analysis's stacks3.pkl (stacked_3way_dm_test.py or the
 real-data notebook), the cluster catalogue it was built from (ID, ZPHOT,
 NGALS, DELTA_M_I), and the per-cluster K_c(R) weights (stack_weights npz:
@@ -27,7 +37,7 @@ assign_stack_bins_3way and checked against every stack's n_stacked.
 usage:
   python scripts/auxiliary_scripts/stacked_forward_fit.py \\
       --catalog cat.fits --stacks stacks3.pkl --weights weights.npz \\
-      --out result.npz [--min-n 10] [--two-halo] [--n-live 2000] [--workers 12]
+      --out result.npz --data {real,sim} [--min-n 50] [--n-live 2000] [--workers 12]
 """
 from __future__ import annotations
 
@@ -84,7 +94,7 @@ def make_prior():
 class StackedForwardModel:
     """Precomputed members, weights and stacked data; callable log-likelihood."""
 
-    def __init__(self, catalog, stacks, weights, min_n=10, two_halo=False,
+    def __init__(self, catalog, stacks, weights, min_n=50, two_halo=False,
                  n_boot_cov=None):
         stacks = stacks["stacks"] if "stacks" in stacks and "z_bin" in stacks else stacks
         keep = np.isfinite(catalog["DELTA_M_I"]) & (catalog["DELTA_M_I"] > 0)
@@ -133,6 +143,8 @@ class StackedForwardModel:
         self.S = csr_matrix((np.ones(len(rows)), (rows, cols)),
                             shape=(len(names), len(allm)))
         sub = cat[allm]
+        # members' row indices in the input catalogue (for diagnostics)
+        self.catalog_rows = np.flatnonzero(np.asarray(keep))[allm]
         self.z = np.asarray(sub["ZPHOT"], float)
         self.lam = np.asarray(sub["NGALS"], float)
         self.log_dm = np.log10(np.asarray(sub["DELTA_M_I"], float) / DELTA_M_REF)
@@ -181,16 +193,20 @@ def main():
     ap.add_argument("--stacks", required=True)
     ap.add_argument("--weights", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--min-n", type=int, default=10)
-    ap.add_argument("--two-halo", action="store_true")
+    ap.add_argument("--data", required=True, choices=["real", "sim"],
+                    help="real -> two-halo term on; sim -> off (see module docstring)")
+    ap.add_argument("--min-n", type=int, default=50)
     ap.add_argument("--n-live", type=int, default=2000)
     ap.add_argument("--workers", type=int, default=12)
     a = ap.parse_args()
+    if a.min_n < 2 * len(wsa.radii):
+        raise SystemExit(f"--min-n {a.min_n} < 2 x {len(wsa.radii)} radial bins: "
+                         "bootstrap covariances of such stacks are (near-)singular")
 
     fm = StackedForwardModel(Table.read(a.catalog), pickle.load(open(a.stacks, "rb")),
-                             np.load(a.weights), min_n=a.min_n, two_halo=a.two_halo)
+                             np.load(a.weights), min_n=a.min_n, two_halo=(a.data == "real"))
     print(f"{len(fm.names)} stacks (N>={a.min_n}), {fm.S.shape[1]:,} member clusters, "
-          f"two_halo={a.two_halo}", flush=True)
+          f"data={a.data} two_halo={fm.two_halo}", flush=True)
     t0 = time.time()
     sampler = Sampler(make_prior(), fm.loglike, n_live=a.n_live, pool=a.workers)
     sampler.run(verbose=True)
@@ -198,7 +214,7 @@ def main():
     w = np.exp(logw - logw.max()); w /= w.sum()
     np.savez(a.out, samples=pts, weights=w, log_l=logl, param_order=np.array(PARAMS),
              stack_names=np.array(fm.names), n_stacked=fm.n_stacked,
-             min_n=a.min_n, two_halo=a.two_halo, log_z=sampler.log_z)
+             min_n=a.min_n, two_halo=fm.two_halo, data=a.data, log_z=sampler.log_z)
     print(f"done in {(time.time() - t0) / 60:.1f} min -> {a.out}")
     for j, name in enumerate(PARAMS):
         o = np.argsort(pts[:, j]); c = np.cumsum(w[o])
