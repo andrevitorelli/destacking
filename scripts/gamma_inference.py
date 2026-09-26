@@ -335,6 +335,10 @@ WILD_OUTLIER_MAX  = float(_cfg("wild_outlier_max", "WILD_OUTLIER_MAX",
 # joint fit otherwise has NO boost correction at all (unlike the stacked
 # pipeline, which applies one internally via stacked_signal).
 BOOSTS_FILE = _cfg("boosts", "BOOSTS_FILE", None)
+# Two-halo term in the fitted model (added 2026-09-26).  true for REAL data,
+# which contain the two-halo signal; false (default) for simulated data,
+# because the simulations shear sources with isolated haloes only.
+TWO_HALO = _yaml_bool(_cfg("two_halo", "TWO_HALO", False))
 if BOOSTS_FILE is not None:
     with open(BOOSTS_FILE, "rb") as _bf:
         import pickle as _pickle
@@ -778,6 +782,7 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
     sampler = run_sampler_combined(
         cluster_obs_boot, data_vectors_fit_boot, cov_matrices_fit_boot, RADII_fit,
         priors=PRIORS, fixed=FIXED_PARAMS, delta_m_ref=DELTA_M_REF,
+        two_halo=TWO_HALO,
         n_live=N_LIVE, pool=N_WORKERS,
         verbose=True, filepath=checkpoint, resume=True, timeout=TIMEOUT,
     )

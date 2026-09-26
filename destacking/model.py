@@ -104,7 +104,7 @@ def diemer19_c200m(M200m, z):
 # ---------------------------------------------------------------------------
 
 def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
-                  BCG_B_MASS=None):
+                  BCG_B_MASS=None, two_halo=False):
     """One-halo NFW ΔΣ profiles for N clusters at M radii (no 2-halo term).
 
     The returned signal is ``xlensing.model.NFW_Delta_Sigma['Signal']
@@ -150,6 +150,12 @@ def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
         BCG_B_MASS = BCG_B_MASS,
         radii      = radii,
     )
+    # two_halo=True keeps xlensing's two-halo term (Johnston+07 linear bias
+    # x matter correlation) -- used for REAL data, which contain it.  The
+    # simulations shear sources with isolated haloes only, so fits to them
+    # must keep the default one-halo model (added 2026-09-26).
+    if two_halo:
+        return out['Signal']
     return out['Signal'] - out['Two-halo term']
 
 
@@ -325,6 +331,7 @@ def forward_model_combined(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
+    two_halo=False,
 ):
     """
     Predict NFW ΔΣ profiles using a combined M–c + magnitude-gap model
@@ -423,6 +430,7 @@ def forward_model_combined(
     return A * _nfw_profiles(
         z, M200m, C200m, radii,
         FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
+        two_halo=two_halo,
     )
 
 
@@ -442,6 +450,7 @@ def forward_model_diemer(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
+    two_halo=False,
 ):
     """
     Predict NFW ΔΣ profiles using the Diemer & Joyce (2019) mass-
@@ -514,4 +523,5 @@ def forward_model_diemer(
     return A * _nfw_profiles(
         z, M200m, C200m, radii,
         FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
+        two_halo=two_halo,
     )

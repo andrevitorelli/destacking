@@ -367,6 +367,7 @@ def log_likelihood_combined(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
+    two_halo=False,
 ):
     """
     Log-likelihood for the combined M–c + magnitude-gap model.
@@ -390,6 +391,7 @@ def log_likelihood_combined(
             delta_m_ref=delta_m_ref, log_M_norm=log_M_norm,
             alpha_mr=alpha_mr, beta_mr=beta_mr, A=A,
             FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
+            two_halo=two_halo,
         )
         if not np.all(np.isfinite(model)):
             return -np.inf
@@ -448,6 +450,7 @@ def run_sampler_combined(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
+    two_halo=False,
     n_live=400,
     pool=None,
     verbose=True,
@@ -665,6 +668,7 @@ def run_sampler_combined(
             FMISS=fmiss_arr,
             SIGMA_OFF=soff_arr,
             BCG_B_MASS=BCG_B_MASS,
+            two_halo=two_halo,
         )
 
     sampler = Sampler(
@@ -756,6 +760,7 @@ def log_likelihood_diemer(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
+    two_halo=False,
 ):
     """
     Log-likelihood for the Diemer & Joyce (2019) M-c relation model
@@ -776,6 +781,7 @@ def log_likelihood_diemer(
             delta_m_ref=delta_m_ref,
             log_M_norm=log_M_norm, alpha_mr=alpha_mr, beta_mr=beta_mr, A=A,
             FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
+            two_halo=two_halo,
         )
         if not np.all(np.isfinite(model)):
             return -np.inf
@@ -806,6 +812,7 @@ def run_sampler_diemer(
     FMISS=None,
     SIGMA_OFF=None,
     BCG_B_MASS=None,
+    two_halo=False,
     n_live=400,
     pool=None,
     verbose=True,
@@ -893,6 +900,7 @@ def run_sampler_diemer(
             FMISS=fmiss_arr,
             SIGMA_OFF=soff_arr,
             BCG_B_MASS=BCG_B_MASS,
+            two_halo=two_halo,
         )
 
     sampler = Sampler(
