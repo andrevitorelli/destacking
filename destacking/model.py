@@ -307,7 +307,7 @@ def forward_model_combined(
     magnitude gap Δm:
 
         log10(M) = log10(M0) + alpha_mr * (log10(Lambda) − log10(Lambda0))
-                              + beta_mr  * (log10(z) − log10(z0))
+                              + beta_mr  * (log10(1+z) − log10(1+z0))
                               + log_M_norm
 
         log10(c) = log10(c0)
@@ -422,7 +422,7 @@ def forward_model_diemer(
     related parameter:
 
         log10(M) = log10(M0) + alpha_mr * (log10(Lambda) − log10(Lambda0))
-                              + beta_mr  * (log10(z) − log10(z0))
+                              + beta_mr  * (log10(1+z) − log10(1+z0))
                               + log_M_norm
 
         log10(c) = log10(c_Diemer19(M200m, z))
