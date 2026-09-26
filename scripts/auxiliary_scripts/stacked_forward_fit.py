@@ -170,7 +170,9 @@ class StackedForwardModel:
             if not np.all(np.isfinite(r)):
                 return -np.inf
             ll -= 0.5 * r @ self.cinv[k] @ r
-        return float(ll)
+        # Extreme prior draws can overflow the quadratic form (inf - inf =
+        # NaN); nautilus needs -inf there, as in destacking.fitting.
+        return float(ll) if np.isfinite(ll) else -np.inf
 
 
 def main():
