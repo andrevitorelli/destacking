@@ -62,7 +62,7 @@ wsa = s3.wsa
 import xlensing  # noqa: E402
 from nautilus import Prior, Sampler  # noqa: E402
 
-from destacking.model import _nfw_components  # noqa: E402
+from destacking.model import _nfw_components, bin_average_nodes  # noqa: E402
 from destacking.relations import mass_lambda_McClintock18  # noqa: E402
 
 DELTA_M_REF = 0.1          # same as gamma_inference.py
@@ -94,7 +94,7 @@ def make_prior():
 class StackedForwardModel:
     """Precomputed members, weights and stacked data; callable log-likelihood."""
 
-    def __init__(self, catalog, stacks, weights, min_n=50, two_halo=False,
+    def __init__(self, catalog, stacks, weights, min_n=50, two_halo=False, bin_nodes=0,
                  n_boot_cov=None):
         stacks = stacks["stacks"] if "stacks" in stacks and "z_bin" in stacks else stacks
         keep = np.isfinite(catalog["DELTA_M_I"]) & (catalog["DELTA_M_I"] > 0)
@@ -154,8 +154,14 @@ class StackedForwardModel:
         self.names, self.data, self.cinv, self.masks = names, data, cinv, masks
         self.n_stacked = np.array(used)
         self.two_halo = two_halo
+        self.bin_nodes = bin_nodes
         if two_halo:
-            self.ds_l = xlensing.model.Delta_Sigma_l(self.z, self.radii) / 1e12
+            if bin_nodes:                      # bin-average the two-halo term too
+                nodes, wts = bin_average_nodes(self.radii, bin_nodes)
+                dl = xlensing.model.Delta_Sigma_l(self.z, nodes.ravel()) / 1e12
+                self.ds_l = (dl.reshape(len(self.z), len(self.radii), -1) * wts).sum(-1)
+            else:
+                self.ds_l = xlensing.model.Delta_Sigma_l(self.z, self.radii) / 1e12
 
     def model(self, p):
         logM = (mass_lambda_McClintock18(self.lam, self.z, Flambda=p["alpha_mr"],
@@ -165,7 +171,8 @@ class StackedForwardModel:
                 + p["gamma_cm"] * self.log_dm)
         M = 10.0 ** logM
         cen, mis = _nfw_components(self.z, M, 10.0 ** logc, self.radii,
-                                   SIGMA_OFF=np.full(len(self.z), p["sigma_off"]))
+                                   SIGMA_OFF=np.full(len(self.z), p["sigma_off"]),
+                                   bin_nodes=self.bin_nodes)
         ds = (1 - p["f_mis"]) * cen + p["f_mis"] * mis
         if self.two_halo:
             ds = ds + xlensing.model.Bias(self.z, M)[:, None] * self.ds_l
@@ -196,6 +203,9 @@ def main():
     ap.add_argument("--data", required=True, choices=["real", "sim"],
                     help="real -> two-halo term on; sim -> off (see module docstring)")
     ap.add_argument("--min-n", type=int, default=50)
+    ap.add_argument("--bin-nodes", type=int, default=0,
+                    help="area-weighted average of the model over each radial bin with this many "
+                         "Gauss-Legendre nodes (0 = evaluate at the bin centre)")
     ap.add_argument("--n-live", type=int, default=2000)
     ap.add_argument("--workers", type=int, default=12)
     a = ap.parse_args()
@@ -204,9 +214,10 @@ def main():
                          "bootstrap covariances of such stacks are (near-)singular")
 
     fm = StackedForwardModel(Table.read(a.catalog), pickle.load(open(a.stacks, "rb")),
-                             np.load(a.weights), min_n=a.min_n, two_halo=(a.data == "real"))
+                             np.load(a.weights), min_n=a.min_n, two_halo=(a.data == "real"),
+                             bin_nodes=a.bin_nodes)
     print(f"{len(fm.names)} stacks (N>={a.min_n}), {fm.S.shape[1]:,} member clusters, "
-          f"data={a.data} two_halo={fm.two_halo}", flush=True)
+          f"data={a.data} two_halo={fm.two_halo} bin_nodes={a.bin_nodes}", flush=True)
     t0 = time.time()
     sampler = Sampler(make_prior(), fm.loglike, n_live=a.n_live, pool=a.workers)
     sampler.run(verbose=True)

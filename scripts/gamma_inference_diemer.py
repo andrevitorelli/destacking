@@ -332,6 +332,9 @@ BOOSTS_FILE = _cfg("boosts", "BOOSTS_FILE", None)
 # which contain the two-halo signal; false (default) for simulated data,
 # because the simulations shear sources with isolated haloes only.
 TWO_HALO = _yaml_bool(_cfg("two_halo", "TWO_HALO", False))
+# Area-weighted average of the model over each radial bin (Gauss-Legendre nodes
+# per bin; 0 = evaluate at the bin centre, the behaviour before 2026-09-28).
+BIN_AVERAGE_NODES = int(_cfg("bin_average_nodes", "BIN_AVERAGE_NODES", 0, cast=int))
 if BOOSTS_FILE is not None:
     with open(BOOSTS_FILE, "rb") as _bf:
         import pickle as _pickle
@@ -697,6 +700,7 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
         cluster_obs_boot, data_vectors_fit_boot, cov_matrices_fit_boot, RADII_fit,
         priors=PRIORS, fixed=FIXED_PARAMS, delta_m_ref=DELTA_M_REF,
         two_halo=TWO_HALO,
+        bin_nodes=BIN_AVERAGE_NODES,
         n_live=N_LIVE, pool=N_WORKERS,
         verbose=True, filepath=checkpoint, resume=True, timeout=TIMEOUT,
     )

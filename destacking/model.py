@@ -103,8 +103,35 @@ def diemer19_c200m(M200m, z):
 # Internal: NFW profile computation
 # ---------------------------------------------------------------------------
 
+def bin_average_nodes(radii, n_nodes):
+    """Radii and weights for the area-weighted average of a profile over each radial bin.
+
+    ``radii`` are the bin centres of a logarithmic grid (the repository's
+    convention: bin edges halfway between neighbouring centres in log R, the
+    outermost edges half a bin beyond the first/last centre).  For sources
+    spread uniformly over the sky, the expected stacked/binned measurement in a
+    bin is the area-weighted mean,
+
+        <f>_bin = int f(R) 2 pi R dR / [pi (R2^2 - R1^2)]
+                = mean of f over t = R^2 in [R1^2, R2^2],
+
+    evaluated here with ``n_nodes`` Gauss-Legendre points in t.  Returns
+    (node_radii (M, K), weights (K,)) with sum(weights) == 1.
+    """
+    radii = np.asarray(radii, dtype=float)
+    if radii.size < 2:
+        raise ValueError("bin averaging needs at least two radial bins to define edges")
+    lr = np.log10(radii)
+    d = np.diff(lr)
+    edges = np.concatenate([[lr[0] - d[0] / 2], 0.5 * (lr[:-1] + lr[1:]), [lr[-1] + d[-1] / 2]])
+    r1, r2 = 10.0 ** edges[:-1], 10.0 ** edges[1:]
+    x, w = np.polynomial.legendre.leggauss(int(n_nodes))
+    t = r1[:, None] ** 2 + (r2[:, None] ** 2 - r1[:, None] ** 2) * 0.5 * (x[None, :] + 1.0)
+    return np.sqrt(t), 0.5 * w
+
+
 def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
-                  BCG_B_MASS=None, two_halo=False):
+                  BCG_B_MASS=None, two_halo=False, bin_nodes=0):
     """One-halo NFW ΔΣ profiles for N clusters at M radii (no 2-halo term).
 
     The returned signal is ``xlensing.model.NFW_Delta_Sigma['Signal']
@@ -141,6 +168,14 @@ def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
     if BCG_B_MASS is None:
         BCG_B_MASS = np.zeros(N)
 
+    # bin_nodes > 0: area-weighted average over each radial bin (added
+    # 2026-09-28) instead of evaluating at the bin centre -- see bin_average_nodes.
+    radii = np.asarray(radii, dtype=float)
+    if bin_nodes:
+        nodes, wts = bin_average_nodes(radii, bin_nodes)
+        eval_radii = nodes.ravel()
+    else:
+        eval_radii = radii
     out = xlensing.model.NFW_Delta_Sigma(
         M200m      = M200m,
         C200m      = C200m,
@@ -148,18 +183,19 @@ def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
         FMISS      = FMISS,
         SIGMA_OFF  = SIGMA_OFF,
         BCG_B_MASS = BCG_B_MASS,
-        radii      = radii,
+        radii      = eval_radii,
     )
     # two_halo=True keeps xlensing's two-halo term (Johnston+07 linear bias
     # x matter correlation) -- used for REAL data, which contain it.  The
     # simulations shear sources with isolated haloes only, so fits to them
     # must keep the default one-halo model (added 2026-09-26).
-    if two_halo:
-        return out['Signal']
-    return out['Signal'] - out['Two-halo term']
+    sig = out['Signal'] if two_halo else out['Signal'] - out['Two-halo term']
+    if bin_nodes:
+        sig = (sig.reshape(len(z), len(radii), -1) * wts).sum(axis=-1)
+    return sig
 
 
-def _nfw_components(z, M200m, C200m, radii, SIGMA_OFF=None):
+def _nfw_components(z, M200m, C200m, radii, SIGMA_OFF=None, bin_nodes=0):
     """Centered and miscentered one-halo NFW ΔΣ, returned separately.
 
     Same physics as ``_nfw_profiles`` (xlensing's NFW + Rayleigh
@@ -182,9 +218,19 @@ def _nfw_components(z, M200m, C200m, radii, SIGMA_OFF=None):
         SIGMA_OFF = np.full(len(z), 0.1)
     rs   = xm.r_vir_m(z, M200m) / C200m
     fact = 2 * rs * xm.NFW_delta_c(C200m) * xm.cosmo.rhoM(z) / 1e12
-    X    = radii[np.newaxis, :] / rs[:, np.newaxis]
+    radii = np.asarray(radii, dtype=float)
+    if bin_nodes:                                  # area-weighted bin average
+        nodes, wts = bin_average_nodes(radii, bin_nodes)
+        eval_radii = nodes.ravel()
+    else:
+        eval_radii = radii
+    X    = eval_radii[np.newaxis, :] / rs[:, np.newaxis]
     centered    = fact[:, None] * (xm.SigBar(X) - xm.SigX(X))
     miscentered = fact[:, None] * xm.Delta_Sigma_NFW_off_x(X, np.asarray(SIGMA_OFF) / rs)
+    if bin_nodes:
+        shape = (len(z), len(radii), -1)
+        centered = (centered.reshape(shape) * wts).sum(-1)
+        miscentered = (miscentered.reshape(shape) * wts).sum(-1)
     return centered, miscentered
 
 
@@ -332,6 +378,7 @@ def forward_model_combined(
     SIGMA_OFF=None,
     BCG_B_MASS=None,
     two_halo=False,
+    bin_nodes=0,
 ):
     """
     Predict NFW ΔΣ profiles using a combined M–c + magnitude-gap model
@@ -431,6 +478,7 @@ def forward_model_combined(
         z, M200m, C200m, radii,
         FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
         two_halo=two_halo,
+        bin_nodes=bin_nodes,
     )
 
 
@@ -451,6 +499,7 @@ def forward_model_diemer(
     SIGMA_OFF=None,
     BCG_B_MASS=None,
     two_halo=False,
+    bin_nodes=0,
 ):
     """
     Predict NFW ΔΣ profiles using the Diemer & Joyce (2019) mass-
@@ -524,4 +573,5 @@ def forward_model_diemer(
         z, M200m, C200m, radii,
         FMISS=FMISS, SIGMA_OFF=SIGMA_OFF, BCG_B_MASS=BCG_B_MASS,
         two_halo=two_halo,
+        bin_nodes=bin_nodes,
     )

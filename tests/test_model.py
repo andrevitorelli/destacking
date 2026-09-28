@@ -343,3 +343,20 @@ def test_nfw_components_reproduce_nfw_profiles():
     ref = _nfw_profiles(z, M, c, RADII, FMISS=f, SIGMA_OFF=so)
     cen, mis = _nfw_components(z, M, c, RADII, SIGMA_OFF=so)
     np.testing.assert_allclose((1 - f)[:, None] * cen + f[:, None] * mis, ref, rtol=1e-12)
+
+
+def test_bin_average_nodes_power_law():
+    """Area-weighted bin average of R^-1 over [R1, R2] is 2 / (R1 + R2)."""
+    from destacking.model import bin_average_nodes
+    R = np.logspace(-0.8, 0.6, 8)
+    nodes, w = bin_average_nodes(R, 4)
+    lr = np.log10(R); d = np.diff(lr)[0]
+    r1, r2 = 10 ** (lr - d / 2), 10 ** (lr + d / 2)
+    np.testing.assert_allclose((1.0 / nodes) @ w, 2.0 / (r1 + r2), rtol=1e-5)
+
+
+def test_bin_nodes_zero_is_bin_centre():
+    """bin_nodes=0 (default) keeps the bin-centre evaluation exactly."""
+    from destacking.model import _nfw_profiles
+    z, M, c = np.array([0.3]), np.array([2e14]), np.array([4.0])
+    np.testing.assert_array_equal(_nfw_profiles(z, M, c, RADII), _nfw_profiles(z, M, c, RADII, bin_nodes=0))
