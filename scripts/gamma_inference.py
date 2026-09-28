@@ -389,6 +389,9 @@ SIGMA_LNLAMBDA_INTR   = float(_cfg("sigma_lnlambda_intr", "SIGMA_LNLAMBDA_INTR",
                                    0.0, cast=float))
 FIT_OBSERVED_RICHNESS = _yaml_bool(_cfg("fit_observed_richness",
                                         "FIT_OBSERVED_RICHNESS", False))
+# Triaxial shear model for simulations: "exact" (default; see
+# destacking.simulation.SimulationConfig.triaxial_shear_model) or "pseudo".
+TRIAXIAL_SHEAR_MODEL = str(_cfg("triaxial_shear_model", "TRIAXIAL_SHEAR_MODEL", "exact"))
 # Physical target aperture radius [Mpc] for the simulated source-injection
 # field -- destacking.simulation._process_cluster converts this to each
 # cluster's own angular half-width via ITS OWN DA(z), not a fixed
@@ -662,6 +665,7 @@ SIM_CFG = SimulationConfig(
     n_workers=N_WORKERS,
     floor_rmax=FLOOR_RMAX,
     sigma_lnlambda_intr=SIGMA_LNLAMBDA_INTR,
+    triaxial_shear_model=TRIAXIAL_SHEAR_MODEL,
 )
 
 

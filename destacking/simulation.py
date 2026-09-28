@@ -442,6 +442,11 @@ class SimulationConfig:
     # the selection draw (build_truth_catalog -> make_test_data).  0.0
     # (default) reproduces every existing simulation exactly.
     sigma_lnlambda_intr: float = 0.0
+    # Triaxial shear model passed to xlensing.sims.apply_triaxial_NFW_shear_region:
+    # "exact" (default from 2026-09-28: true lensing of the projected triaxial NFW,
+    # with the line-of-sight amplitude) or "pseudo" (the earlier pseudo-elliptical
+    # approximation, ~19% low on average; only to reproduce older campaigns).
+    triaxial_shear_model: str = "exact"
 
     @property
     def n_bins(self):
@@ -743,7 +748,8 @@ def _process_cluster(i):
             _SHAPES["theta_los"][i], _SHAPES["phi_los"][i],
         ]
         gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc,
-                                                      response=resp_i)
+                                                      response=resp_i,
+                                                      model=_CFG.triaxial_shear_model)
     else:
         cluster_arr = [
             0.0, 0.0, z_i, M_i, c_i, a_i,
@@ -751,7 +757,8 @@ def _process_cluster(i):
             _SHAPES["theta_los"][i], _SHAPES["phi_los"][i],
         ]
         gal_sheared = apply_triaxial_NFW_shear_region(cluster_arr, gal_mc,
-                                                      response=resp_i)
+                                                      response=resp_i,
+                                                      model=_CFG.triaxial_shear_model)
 
     # Stage 5 — measure from the (possibly miscentered) observed position.
     # Column reorder puts the weight (col 9) after the shapes, matching the
