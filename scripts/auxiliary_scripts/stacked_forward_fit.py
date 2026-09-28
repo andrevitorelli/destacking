@@ -28,6 +28,10 @@ covariance is singular and its inverse dominates the whole likelihood (found
 2026-09-26: five N=10 stacks carried 37,000 of a 37,789 chi^2 at truth on
 the DES-like simulation).  --min-n defaults to 50 and must be >= 2 x bins.
 
+Inner radius: --r-min (default 0) drops stacked bins whose centre is below it.
+Use 0.25 Mpc to match the joint fits: non-linear shear response, crowding and
+member contamination grow towards the centre and are not simulated.
+
 Inputs: the stacked analysis's stacks3.pkl (stacked_3way_dm_test.py or the
 real-data notebook), the cluster catalogue it was built from (ID, ZPHOT,
 NGALS, DELTA_M_I), and the per-cluster K_c(R) weights (stack_weights npz:
@@ -95,7 +99,7 @@ class StackedForwardModel:
     """Precomputed members, weights and stacked data; callable log-likelihood."""
 
     def __init__(self, catalog, stacks, weights, min_n=50, two_halo=False, bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
-                 n_boot_cov=None):
+                 n_boot_cov=None, r_min=0.0):
         stacks = stacks["stacks"] if "stacks" in stacks and "z_bin" in stacks else stacks
         keep = np.isfinite(catalog["DELTA_M_I"]) & (catalog["DELTA_M_I"] > 0)
         cat = catalog[keep]
@@ -122,7 +126,7 @@ class StackedForwardModel:
                 continue
             d = np.asarray(s["sigmas"], float)
             C = np.asarray(s["sigmas_cov"], float)
-            ok = np.isfinite(d) & np.isfinite(np.diag(C)) & (np.diag(C) > 0)
+            ok = np.isfinite(d) & np.isfinite(np.diag(C)) & (np.diag(C) > 0) & (self.radii >= r_min)
             if ok.sum() < 3:
                 continue
             Cs = C[np.ix_(ok, ok)]
@@ -203,6 +207,9 @@ def main():
     ap.add_argument("--data", required=True, choices=["real", "sim"],
                     help="real -> two-halo term on; sim -> off (see module docstring)")
     ap.add_argument("--min-n", type=int, default=50)
+    ap.add_argument("--r-min", type=float, default=0.0,
+                    help="drop stacked radial bins whose centre is below this radius [Mpc] (default 0: keep all); "
+                         "0.25 matches the joint fits' inner radius")
     ap.add_argument("--bin-nodes", type=int, default=BIN_AVERAGE_NODES_DEFAULT,
                     help="area-weighted average of the model over each radial bin with this many "
                          "Gauss-Legendre nodes (default 4; 0 = bin centre, only to reproduce older fits)")
@@ -215,9 +222,10 @@ def main():
 
     fm = StackedForwardModel(Table.read(a.catalog), pickle.load(open(a.stacks, "rb")),
                              np.load(a.weights), min_n=a.min_n, two_halo=(a.data == "real"),
-                             bin_nodes=a.bin_nodes)
+                             bin_nodes=a.bin_nodes, r_min=a.r_min)
     print(f"{len(fm.names)} stacks (N>={a.min_n}), {fm.S.shape[1]:,} member clusters, "
-          f"data={a.data} two_halo={fm.two_halo} bin_nodes={a.bin_nodes}", flush=True)
+          f"data={a.data} two_halo={fm.two_halo} bin_nodes={a.bin_nodes} r_min={a.r_min} Mpc "
+          f"({int(np.sum(fm.radii >= a.r_min))} of {len(fm.radii)} radial bins)", flush=True)
     t0 = time.time()
     sampler = Sampler(make_prior(), fm.loglike, n_live=a.n_live, pool=a.workers)
     sampler.run(verbose=True)
@@ -225,7 +233,7 @@ def main():
     w = np.exp(logw - logw.max()); w /= w.sum()
     np.savez(a.out, samples=pts, weights=w, log_l=logl, param_order=np.array(PARAMS),
              stack_names=np.array(fm.names), n_stacked=fm.n_stacked,
-             min_n=a.min_n, two_halo=fm.two_halo, data=a.data, log_z=sampler.log_z)
+             min_n=a.min_n, two_halo=fm.two_halo, data=a.data, r_min=a.r_min, bin_nodes=a.bin_nodes, log_z=sampler.log_z)
     print(f"done in {(time.time() - t0) / 60:.1f} min -> {a.out}")
     for j, name in enumerate(PARAMS):
         o = np.argsort(pts[:, j]); c = np.cumsum(w[o])
