@@ -1,4 +1,5 @@
 import numpy as np
+from destacking.model import BIN_AVERAGE_NODES_DEFAULT
 
 from destacking.model import (
     forward_model, forward_model_mc, forward_model_combined,
@@ -368,7 +369,7 @@ def log_likelihood_combined(
     SIGMA_OFF=None,
     BCG_B_MASS=None,
     two_halo=False,
-    bin_nodes=0,
+    bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
 ):
     """
     Log-likelihood for the combined M–c + magnitude-gap model.
@@ -453,7 +454,7 @@ def run_sampler_combined(
     SIGMA_OFF=None,
     BCG_B_MASS=None,
     two_halo=False,
-    bin_nodes=0,
+    bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
     n_live=400,
     pool=None,
     verbose=True,
@@ -765,7 +766,7 @@ def log_likelihood_diemer(
     SIGMA_OFF=None,
     BCG_B_MASS=None,
     two_halo=False,
-    bin_nodes=0,
+    bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
 ):
     """
     Log-likelihood for the Diemer & Joyce (2019) M-c relation model
@@ -819,7 +820,7 @@ def run_sampler_diemer(
     SIGMA_OFF=None,
     BCG_B_MASS=None,
     two_halo=False,
-    bin_nodes=0,
+    bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
     n_live=400,
     pool=None,
     verbose=True,

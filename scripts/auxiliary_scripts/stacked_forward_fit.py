@@ -62,7 +62,7 @@ wsa = s3.wsa
 import xlensing  # noqa: E402
 from nautilus import Prior, Sampler  # noqa: E402
 
-from destacking.model import _nfw_components, bin_average_nodes  # noqa: E402
+from destacking.model import BIN_AVERAGE_NODES_DEFAULT, _nfw_components, bin_average_nodes  # noqa: E402
 from destacking.relations import mass_lambda_McClintock18  # noqa: E402
 
 DELTA_M_REF = 0.1          # same as gamma_inference.py
@@ -94,7 +94,7 @@ def make_prior():
 class StackedForwardModel:
     """Precomputed members, weights and stacked data; callable log-likelihood."""
 
-    def __init__(self, catalog, stacks, weights, min_n=50, two_halo=False, bin_nodes=0,
+    def __init__(self, catalog, stacks, weights, min_n=50, two_halo=False, bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
                  n_boot_cov=None):
         stacks = stacks["stacks"] if "stacks" in stacks and "z_bin" in stacks else stacks
         keep = np.isfinite(catalog["DELTA_M_I"]) & (catalog["DELTA_M_I"] > 0)
@@ -203,9 +203,9 @@ def main():
     ap.add_argument("--data", required=True, choices=["real", "sim"],
                     help="real -> two-halo term on; sim -> off (see module docstring)")
     ap.add_argument("--min-n", type=int, default=50)
-    ap.add_argument("--bin-nodes", type=int, default=0,
+    ap.add_argument("--bin-nodes", type=int, default=BIN_AVERAGE_NODES_DEFAULT,
                     help="area-weighted average of the model over each radial bin with this many "
-                         "Gauss-Legendre nodes (0 = evaluate at the bin centre)")
+                         "Gauss-Legendre nodes (default 4; 0 = bin centre, only to reproduce older fits)")
     ap.add_argument("--n-live", type=int, default=2000)
     ap.add_argument("--workers", type=int, default=12)
     a = ap.parse_args()

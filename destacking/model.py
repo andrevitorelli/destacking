@@ -103,6 +103,13 @@ def diemer19_c200m(M200m, z):
 # Internal: NFW profile computation
 # ---------------------------------------------------------------------------
 
+# Default for every model evaluation (2026-09-28): the area-weighted average over each
+# radial bin, with this many Gauss-Legendre nodes (accurate to ~3e-6 for NFW profiles).
+# The measurement is an average over the annulus, so this is the consistent model;
+# 0 evaluates at the bin centre and is kept only to reproduce older fits.
+BIN_AVERAGE_NODES_DEFAULT = 4
+
+
 def bin_average_nodes(radii, n_nodes):
     """Radii and weights for the area-weighted average of a profile over each radial bin.
 
@@ -131,7 +138,7 @@ def bin_average_nodes(radii, n_nodes):
 
 
 def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
-                  BCG_B_MASS=None, two_halo=False, bin_nodes=0):
+                  BCG_B_MASS=None, two_halo=False, bin_nodes=BIN_AVERAGE_NODES_DEFAULT):
     """One-halo NFW ΔΣ profiles for N clusters at M radii (no 2-halo term).
 
     The returned signal is ``xlensing.model.NFW_Delta_Sigma['Signal']
@@ -171,6 +178,8 @@ def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
     # bin_nodes > 0: area-weighted average over each radial bin (added
     # 2026-09-28) instead of evaluating at the bin centre -- see bin_average_nodes.
     radii = np.asarray(radii, dtype=float)
+    if radii.size < 2:
+        bin_nodes = 0          # a single radius defines no bin: evaluate at it
     if bin_nodes:
         nodes, wts = bin_average_nodes(radii, bin_nodes)
         eval_radii = nodes.ravel()
@@ -195,7 +204,7 @@ def _nfw_profiles(z, M200m, C200m, radii, FMISS=None, SIGMA_OFF=None,
     return sig
 
 
-def _nfw_components(z, M200m, C200m, radii, SIGMA_OFF=None, bin_nodes=0):
+def _nfw_components(z, M200m, C200m, radii, SIGMA_OFF=None, bin_nodes=BIN_AVERAGE_NODES_DEFAULT):
     """Centered and miscentered one-halo NFW ΔΣ, returned separately.
 
     Same physics as ``_nfw_profiles`` (xlensing's NFW + Rayleigh
@@ -219,6 +228,8 @@ def _nfw_components(z, M200m, C200m, radii, SIGMA_OFF=None, bin_nodes=0):
     rs   = xm.r_vir_m(z, M200m) / C200m
     fact = 2 * rs * xm.NFW_delta_c(C200m) * xm.cosmo.rhoM(z) / 1e12
     radii = np.asarray(radii, dtype=float)
+    if radii.size < 2:
+        bin_nodes = 0                              # a single radius defines no bin
     if bin_nodes:                                  # area-weighted bin average
         nodes, wts = bin_average_nodes(radii, bin_nodes)
         eval_radii = nodes.ravel()
@@ -378,7 +389,7 @@ def forward_model_combined(
     SIGMA_OFF=None,
     BCG_B_MASS=None,
     two_halo=False,
-    bin_nodes=0,
+    bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
 ):
     """
     Predict NFW ΔΣ profiles using a combined M–c + magnitude-gap model
@@ -499,7 +510,7 @@ def forward_model_diemer(
     SIGMA_OFF=None,
     BCG_B_MASS=None,
     two_halo=False,
-    bin_nodes=0,
+    bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
 ):
     """
     Predict NFW ΔΣ profiles using the Diemer & Joyce (2019) mass-

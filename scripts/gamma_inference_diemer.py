@@ -333,8 +333,10 @@ BOOSTS_FILE = _cfg("boosts", "BOOSTS_FILE", None)
 # because the simulations shear sources with isolated haloes only.
 TWO_HALO = _yaml_bool(_cfg("two_halo", "TWO_HALO", False))
 # Area-weighted average of the model over each radial bin (Gauss-Legendre nodes
-# per bin; 0 = evaluate at the bin centre, the behaviour before 2026-09-28).
-BIN_AVERAGE_NODES = int(_cfg("bin_average_nodes", "BIN_AVERAGE_NODES", 0, cast=int))
+# per bin).  Default since 2026-09-28: destacking.model.BIN_AVERAGE_NODES_DEFAULT (4);
+# 0 = evaluate at the bin centre, only to reproduce older fits.
+from destacking.model import BIN_AVERAGE_NODES_DEFAULT as _BIN_DEFAULT
+BIN_AVERAGE_NODES = int(_cfg("bin_average_nodes", "BIN_AVERAGE_NODES", _BIN_DEFAULT, cast=int))
 if BOOSTS_FILE is not None:
     with open(BOOSTS_FILE, "rb") as _bf:
         import pickle as _pickle
