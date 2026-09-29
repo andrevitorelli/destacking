@@ -434,7 +434,12 @@ SEED_OFFSET = int(_cfg("seed_offset", "SEED_OFFSET", 0, cast=int))
 # worst case) measured ~10x higher simulation-phase compute/memory cost --
 # this per-cluster fix avoids that: every cluster now gets the same
 # appropriately-sized ~5.3 Mpc physical field regardless of redshift.
-WIDTH_RAD       = 5.0
+# Measurement aperture radius [Mpc] (config key measurement_radius_mpc, default 5.0).
+# The radial grid's outermost bin edge must lie inside it, or that bin covers a
+# truncated annulus: the default 8-bin -0.8..0.6 grid ends at 5.01 Mpc (+0.2 % in
+# the last bin), the real-data-like 6-bin -0.6..0.6 grid at 5.25 Mpc (+4.5 %
+# relative to the full-bin average; found 2026-09-29).
+WIDTH_RAD       = float(_cfg("measurement_radius_mpc", "MEASUREMENT_RADIUS_MPC", 5.0, cast=float))
 Z_SRC_RANGE     = (0.0, 2.5)
 
 _log_r = np.log10(SIM_RADII)
