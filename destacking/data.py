@@ -160,3 +160,64 @@ def magnitude_gaps(mag_bcg, mag_mem, p_mem, r_mem, r_cut=.5):
     error_mag_gap = np.sqrt(sum(probs * deltas2) - mag_gap ** 2)
 
     return mag_gap, error_mag_gap
+
+
+# ── Per-cluster data vector with an analytic shape-noise covariance ─────────
+# Added 2026-09-29.  The per-cluster galaxy-bootstrap covariance
+# (xlensing.data.bootstrap_signal) correlates with the value it accompanies:
+# a ratio estimator's bootstrap variance depends on the measured value, so an
+# inverse-variance likelihood up-weights bins that fluctuate high.  In
+# LSST-like simulations this inflated inner bins by 3 % -> 0.2 % and biased the
+# joint fit's c0 (+0.135) and beta_cm (+0.074); at DES-like density single
+# bins beyond floor_rmax with ~500x too-small variances took over whole fits.
+# The covariance below uses no individual shape: each galaxy contributes its
+# weight, Sigma_crit and response, and a POPULATION shape-noise dispersion
+# sigma_e (estimated from the cross-shear component of the whole source sample,
+# which carries no lensing signal, or supplied per galaxy class).  Shape noise
+# is independent between radial bins (each galaxy is in one bin), so the
+# covariance is diagonal.
+
+def population_sigma_e(stakes, min_count=1):
+    """Per-component shape-noise dispersion from the cross shear of a sample.
+
+    ``stakes`` is an iterable of xlensing stakes (rows Sigma_crit, e_t, e_x,
+    W, R, M).  Returns sqrt(sum W e_x^2 / sum W) over all galaxies: the cross
+    component has no lensing signal, so its weighted rms is the per-component
+    dispersion of the measured shapes (intrinsic + measurement noise).
+    """
+    num = den = 0.0
+    n = 0
+    for st in stakes:
+        if st is None:
+            continue
+        w = np.asarray(st[3], dtype=float)
+        ex = np.asarray(st[2], dtype=float)
+        num += float(np.sum(w * ex ** 2)); den += float(np.sum(w)); n += len(w)
+    if n < min_count or den <= 0:
+        raise ValueError("no galaxies to estimate sigma_e from")
+    return float(np.sqrt(num / den))
+
+
+def analytic_signal(stake, bin_limits, sigma_e, min_gal=3):
+    """Direct Delta Sigma estimator and its analytic shape-noise covariance.
+
+        DeltaSigma_b = sum_i e_t,i W_i / Sigma_cr,i  /  sum_i R_i W_i / Sigma_cr,i^2
+        Var_b        = sum_i sigma_e,i^2 (W_i / Sigma_cr,i)^2 / (sum_i R_i W_i / Sigma_cr,i^2)^2
+
+    (the xlensing ``signal`` estimator, with R = 1 + M).  ``sigma_e`` is a
+    scalar or a per-galaxy array.  Bins with fewer than ``min_gal`` galaxies
+    are NaN in the data vector (and get a unit placeholder variance), so the
+    likelihood's NaN masking drops them.  Returns (dv, cov) with cov diagonal.
+    """
+    sig, et, ex, w, R, M = (np.asarray(stake[k], dtype=float) for k in range(6))
+    bl = np.asarray(bin_limits, dtype=float)
+    se2 = np.broadcast_to(np.asarray(sigma_e, dtype=float) ** 2, w.shape)
+    in_bin = (R[:, None] > bl[:, 0]) & (R[:, None] < bl[:, 1])
+    den = ((1.0 + M) * w / sig ** 2) @ in_bin
+    num = (et * w / sig) @ in_bin
+    var = (se2 * (w / sig) ** 2) @ in_bin
+    n = in_bin.sum(0)
+    ok = (n >= min_gal) & (den > 0)
+    dv = np.where(ok, num / np.where(ok, den, 1.0), np.nan)
+    v = np.where(ok, var / np.where(ok, den, 1.0) ** 2, 1.0)
+    return dv, np.diag(v)

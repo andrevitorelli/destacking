@@ -218,3 +218,26 @@ def test_magnitude_gaps_single_inner_member():
     )
     assert mag_gap == pytest.approx(2.0)
     assert err == pytest.approx(0.0, abs=1e-10)
+
+
+def test_analytic_signal_matches_xlensing_estimator_and_variance():
+    """Direct estimator equals xlensing.signal; variance equals the shape-noise formula; sparse bins are NaN."""
+    from destacking.data import analytic_signal, population_sigma_e
+    from xlensing.data import signal
+    rng = np.random.default_rng(3)
+    n = 4000
+    R = rng.uniform(0.1, 4.0, n); sig = rng.uniform(2e3, 6e3, n) / 1e3
+    w = rng.uniform(0.5, 1.5, n); M = rng.uniform(-0.3, 0.0, n)
+    et = rng.normal(0.05, 0.27, n); ex = rng.normal(0.0, 0.27, n)
+    stake = np.array([sig, et, ex, w, R, M])
+    bl = np.array([[0.1, 0.12], [0.2, 0.5], [0.5, 1.0], [1.0, 4.0]])
+    dv, cov = analytic_signal(stake, bl, 0.27, min_gal=3)
+    ref = signal(stake, bl)[0]
+    np.testing.assert_allclose(dv[1:], ref[1:], rtol=1e-12)
+    inb = (R > 1.0) & (R < 4.0)
+    expect = 0.27 ** 2 * np.sum((w / sig)[inb] ** 2) / np.sum(((1 + M) * w / sig ** 2)[inb]) ** 2
+    np.testing.assert_allclose(cov[3, 3], expect, rtol=1e-12)
+    assert np.count_nonzero(cov - np.diag(np.diag(cov))) == 0
+    if ((R > 0.1) & (R < 0.12)).sum() < 3:
+        assert np.isnan(dv[0])
+    assert abs(population_sigma_e([stake]) - 0.27) < 0.01

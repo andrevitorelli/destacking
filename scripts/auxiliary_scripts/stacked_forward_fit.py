@@ -81,18 +81,39 @@ PARAMS = ["c0", "alpha_cm", "beta_cm", "gamma_cm", "log_M_norm",
           "alpha_mr", "beta_mr", "f_mis", "sigma_off"]
 
 
-def make_prior():
+_LEGACY_PRIOR = {   # the very wide set used until 2026-09-29
+    "c0": {"prior": "gaussian", "loc": 4.5, "scale": 10.0, "lo": 0.0},
+    "alpha_cm": {"prior": "gaussian", "loc": -0.088, "scale": 3.0},
+    "beta_cm": {"prior": "gaussian", "loc": -0.4, "scale": 10.0},
+    "gamma_cm": {"prior": "gaussian", "loc": 0.0, "scale": 10.5},
+    "log_M_norm": {"prior": "gaussian", "loc": 0.0, "scale": 3.0},
+    "alpha_mr": {"prior": "gaussian", "loc": 1.356, "scale": 3.0},
+    "beta_mr": {"prior": "gaussian", "loc": -0.30, "scale": 3.0},
+    "f_mis": {"prior": "flat", "lo": 0.0, "hi": 1.0},
+    "sigma_off": {"prior": "flat", "lo": 0.0, "hi": 1.0},
+}
+PHYSICAL_PRIORS_FILE = os.path.join(_HERE, "..", "fit_params_physical_priors.yaml")
+
+
+def make_prior(spec="physical"):
+    """nautilus Prior from a fit_params-style spec: "physical" (default since 2026-09-29,
+    scripts/fit_params_physical_priors.yaml, shared with gamma_inference.py), "legacy", or a YAML path."""
+    if spec == "legacy":
+        fp = _LEGACY_PRIOR
+    else:
+        import yaml
+        with open(PHYSICAL_PRIORS_FILE if spec == "physical" else spec) as fh:
+            fp = yaml.safe_load(fh)["fit_params"]
     p = Prior()
-    p.add_parameter("c0", dist=stats.truncnorm((0.0 - 4.5) / 10.0, np.inf,
-                                               loc=4.5, scale=10.0))
-    p.add_parameter("alpha_cm", dist=stats.norm(-0.088, 3.0))
-    p.add_parameter("beta_cm", dist=stats.norm(-0.4, 10.0))
-    p.add_parameter("gamma_cm", dist=stats.norm(0.0, 10.5))
-    p.add_parameter("log_M_norm", dist=stats.norm(0.0, 3.0))
-    p.add_parameter("alpha_mr", dist=stats.norm(1.356, 3.0))
-    p.add_parameter("beta_mr", dist=stats.norm(-0.30, 3.0))
-    p.add_parameter("f_mis", dist=stats.uniform(0.0, 1.0))
-    p.add_parameter("sigma_off", dist=stats.uniform(0.0, 1.0))
+    for name in PARAMS:
+        d = fp[name]
+        if d["prior"] == "flat":
+            p.add_parameter(name, dist=stats.uniform(d["lo"], d["hi"] - d["lo"]))
+        elif "lo" in d:
+            p.add_parameter(name, dist=stats.truncnorm((d["lo"] - d["loc"]) / d["scale"], np.inf,
+                                                       loc=d["loc"], scale=d["scale"]))
+        else:
+            p.add_parameter(name, dist=stats.norm(d["loc"], d["scale"]))
     return p
 
 
@@ -217,6 +238,8 @@ def main():
                     help="area-weighted average of the model over each radial bin with this many "
                          "Gauss-Legendre nodes (default 4; 0 = bin centre, only to reproduce older fits)")
     ap.add_argument("--n-live", type=int, default=2000)
+    ap.add_argument("--priors", default="physical",
+                    help='"physical" (default), "legacy" (pre-2026-09-29 wide set), or a fit_params YAML path')
     ap.add_argument("--workers", type=int, default=12)
     a = ap.parse_args()
     if a.min_n < 2 * len(wsa.radii):
@@ -230,7 +253,7 @@ def main():
           f"data={a.data} two_halo={fm.two_halo} bin_nodes={a.bin_nodes} r_min={a.r_min} Mpc "
           f"({int(np.sum(fm.radii >= a.r_min))} of {len(fm.radii)} radial bins)", flush=True)
     t0 = time.time()
-    sampler = Sampler(make_prior(), fm.loglike, n_live=a.n_live, pool=a.workers)
+    sampler = Sampler(make_prior(a.priors), fm.loglike, n_live=a.n_live, pool=a.workers)
     sampler.run(verbose=True, n_eff=a.n_eff)
     pts, logw, logl = sampler.posterior()
     w = np.exp(logw - logw.max()); w /= w.sum()
