@@ -1410,6 +1410,26 @@ def write_progress(scan_results, run_dir, run_t0, n_total):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _release_memory():
+    """Free the previous gamma point's arrays before the next one (2026-09-29).
+
+    A multi-gamma LSST simulation job ran out of memory at its SECOND gamma
+    with the same 32 GB that suffices for a single gamma: the per-cluster
+    background lists (~80,000 arrays) and data products of the finished
+    point were still resident when the next point's worker pool forked.
+    Collect cycles and ask glibc to hand freed heap back to the OS, so each
+    gamma point starts from roughly the single-gamma footprint.
+    """
+    import ctypes
+    import gc
+
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):    # non-glibc platforms
+        pass
+
+
 def main():
     if not SIMULATION and not INFERENCE:
         print("Nothing to do: simulation and inference are both false.",
@@ -1477,6 +1497,8 @@ def main():
             flush=True,
         )
         iter_t0 = time.time()
+        if g_idx > 0:
+            _release_memory()
 
         try:
             if SIMULATION:

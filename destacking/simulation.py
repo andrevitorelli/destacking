@@ -862,4 +862,8 @@ def simulate_lensing(truth, shapes, mis, g_idx, cfg):
                 cov_matrices[idx] = cov   # full (n_bins, n_bins) matrix
                 bgs[idx]          = bg
 
+    # Drop the per-run module state the (now closed) worker pool read, so a
+    # multi-gamma job does not keep the previous point's truth/shapes alive.
+    _TRUTH = _SHAPES = _OFF_MAG_MPC = _PHI_MIS = None
+
     return data_vectors, cov_matrices, bgs
