@@ -397,6 +397,14 @@ FIT_OBSERVED_RICHNESS = _yaml_bool(_cfg("fit_observed_richness",
 # Triaxial shear model for simulations: "exact" (default; see
 # destacking.simulation.SimulationConfig.triaxial_shear_model) or "pseudo".
 TRIAXIAL_SHEAR_MODEL = str(_cfg("triaxial_shear_model", "TRIAXIAL_SHEAR_MODEL", "exact"))
+# Seed offset for independent realisations (2026-09-29).  Every random stage
+# of the simulation is seeded from the per-gamma index g_idx (position in the
+# gamma list), so two runs with the same gamma list -- e.g. every campaign job,
+# each with a single gamma at g_idx=0 -- share the same clusters, galaxies and
+# shape noise.  The simulation phase seeds from g_idx + seed_offset instead;
+# directory names and sim_prefix file names still use g_idx.  Default 0
+# reproduces every existing simulation exactly.
+SEED_OFFSET = int(_cfg("seed_offset", "SEED_OFFSET", 0, cast=int))
 # Physical target aperture radius [Mpc] for the simulated source-injection
 # field -- destacking.simulation._process_cluster converts this to each
 # cluster's own angular half-width via ITS OWN DA(z), not a fixed
@@ -949,8 +957,9 @@ def simulate_one_gamma(g_idx, gamma_true, sim_subdir):
               flush=True)
         return
 
-    print(f"  building truth catalogue (γ={gamma_true:+.1f}) ...", flush=True)
-    truth, ols = build_truth_catalog(gamma_true, g_idx)
+    s_idx = g_idx + SEED_OFFSET        # seed index (see SEED_OFFSET)
+    print(f"  building truth catalogue (γ={gamma_true:+.1f}, seed index {s_idx}) ...", flush=True)
+    truth, ols = build_truth_catalog(gamma_true, s_idx)
     print(
         f"    OLS: c0={ols['c0_true']:.3f}, "
         f"α={ols['alpha_true']:.4f}, β={ols['beta_true']:.4f}, "
@@ -959,15 +968,15 @@ def simulate_one_gamma(g_idx, gamma_true, sim_subdir):
     )
 
     print("  triaxial shapes + miscentering ...", flush=True)
-    shapes = compute_triaxial_shapes(truth, g_idx)
-    mis    = compute_miscentering(g_idx)
+    shapes = compute_triaxial_shapes(truth, s_idx)
+    mis    = compute_miscentering(s_idx)
 
     print(f"  simulating lensing ({N_CLUSTERS} clusters) ...", flush=True)
-    data_vectors, cov_matrices, bgs = simulate_lensing(truth, shapes, mis, g_idx)
+    data_vectors, cov_matrices, bgs = simulate_lensing(truth, shapes, mis, s_idx)
 
     cluster_obs, _, _ = make_test_data(
         truth, SIM_RADII, fractional_noise=0.2,
-        poisson_richness=False, seed=_seed(g_idx, 1),
+        poisson_richness=False, seed=_seed(s_idx, 1),
     )
     if FIT_OBSERVED_RICHNESS:
         cluster_obs["Lambda"] = np.asarray(truth["Lambda"], dtype=float)
@@ -982,6 +991,7 @@ def simulate_one_gamma(g_idx, gamma_true, sim_subdir):
         flush=True,
     )
 
+    ols["seed_index"] = int(s_idx)
     print("  saving simulation checkpoint ...", flush=True)
     save_simulation_checkpoint(
         sim_subdir, truth, ols, cluster_obs, data_vectors, cov_matrices
