@@ -67,6 +67,7 @@ import xlensing  # noqa: E402
 from nautilus import Prior, Sampler  # noqa: E402
 
 from destacking.model import BIN_AVERAGE_NODES_DEFAULT, _nfw_components, bin_average_nodes  # noqa: E402
+from destacking.fitting import N_EFF_DEFAULT  # noqa: E402
 from destacking.relations import mass_lambda_McClintock18  # noqa: E402
 
 DELTA_M_REF = 0.1          # same as gamma_inference.py
@@ -210,6 +211,8 @@ def main():
     ap.add_argument("--r-min", type=float, default=0.0,
                     help="drop stacked radial bins whose centre is below this radius [Mpc] (default 0: keep all); "
                          "0.25 matches the joint fits' inner radius")
+    ap.add_argument("--n-eff", type=int, default=N_EFF_DEFAULT,
+                    help="nautilus target effective sample size (default destacking.fitting.N_EFF_DEFAULT)")
     ap.add_argument("--bin-nodes", type=int, default=BIN_AVERAGE_NODES_DEFAULT,
                     help="area-weighted average of the model over each radial bin with this many "
                          "Gauss-Legendre nodes (default 4; 0 = bin centre, only to reproduce older fits)")
@@ -228,7 +231,7 @@ def main():
           f"({int(np.sum(fm.radii >= a.r_min))} of {len(fm.radii)} radial bins)", flush=True)
     t0 = time.time()
     sampler = Sampler(make_prior(), fm.loglike, n_live=a.n_live, pool=a.workers)
-    sampler.run(verbose=True)
+    sampler.run(verbose=True, n_eff=a.n_eff)
     pts, logw, logl = sampler.posterior()
     w = np.exp(logw - logw.max()); w /= w.sum()
     np.savez(a.out, samples=pts, weights=w, log_l=logl, param_order=np.array(PARAMS),

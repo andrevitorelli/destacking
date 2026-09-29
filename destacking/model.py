@@ -103,11 +103,24 @@ def diemer19_c200m(M200m, z):
 # Internal: NFW profile computation
 # ---------------------------------------------------------------------------
 
-# Default for every model evaluation (2026-09-28): the area-weighted average over each
-# radial bin, with this many Gauss-Legendre nodes (accurate to ~3e-6 for NFW profiles).
-# The measurement is an average over the annulus, so this is the consistent model;
-# 0 evaluates at the bin centre and is kept only to reproduce older fits.
-BIN_AVERAGE_NODES_DEFAULT = 4
+# Default model evaluation: at the logarithmic bin centre (bin_nodes=0).
+# bin_nodes > 0 instead returns the area-weighted average over each radial bin
+# with that many Gauss-Legendre nodes (accurate to ~3e-6 for NFW with 4 nodes),
+# which is the exact counterpart of the annulus-averaged measurement.
+#
+# History: made the default (4 nodes) on 2026-09-28, reverted to 0 on 2026-09-29.
+# Paired LSST-like fits of IDENTICAL simulated data with the two models showed
+# that averaging does not change the gamma_cm result: LSSTsph -> LSSTsphBA
+# 0.1894 -> 0.1906 (+0.1 sigma) and LSSTclean -> LSSTcleanBA 0.1842 -> 0.1884
+# (+0.7 sigma, part of it unseeded bootstrap resampling); c0, alpha_cm, beta_cm
+# move by <= 1 sigma.  The bin-centre error (1-3.5 %, nearly independent of mass
+# and concentration) is absorbed almost entirely by the mass normalisation:
+# log_M_norm -0.017/-0.018 (centre) vs +0.001 (average), i.e. a ~0.018 dex
+# shift that cancels in the differential gamma_cm.  Averaging costs ~4x per
+# likelihood call, which pushed LSST fits against their per-fit time budget, so
+# the cheaper bin-centre model is used for the campaign.  DES-like bins are
+# 0.24 dex wide vs LSST's 0.20 dex; the centre error scales ~ width^2, i.e. ~1.4x.
+BIN_AVERAGE_NODES_DEFAULT = 0
 
 
 def bin_average_nodes(radii, n_nodes):

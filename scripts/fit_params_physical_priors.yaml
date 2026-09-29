@@ -1,0 +1,25 @@
+# Physically motivated, weakly informative priors for the 9-parameter joint fit
+# (2026-09-29).  Copy this fit_params block into a gamma_inference.py config.
+#
+# Replaces the very wide priors used until then (c0 ~ N(4.5, 10), alpha_cm ~ N(-0.09, 3),
+# beta_cm ~ N(-0.4, 10), gamma_cm ~ N(0, 10.5), log_M_norm ~ N(0, 3), alpha_mr/beta_mr ~ N(., 3)),
+# which put almost all prior volume on unphysical values: the posterior was ~40 nats narrower
+# than the prior (vs ~12 for the 5-parameter fit), and every LSST "jointfull" bootstrap hit its
+# per-fit time budget unconverged.
+#
+# Rule: every physically plausible value lies within ~2 sigma of the prior centre, and each prior
+# is >= ~7x wider than the widest posterior seen (real WaZP+DES-Y3 data), so the prior pulls a
+# result by <= ~2 % of its distance from the prior centre.  Reference posterior widths
+# (real data / LSST-like sims): gamma_cm 0.05 / 0.005, log_M_norm 0.016 / 0.003, alpha_cm 0.1 / 0.01,
+# beta_cm 0.6 / 0.1, alpha_mr 0.05, beta_mr 0.26 (real data gives beta_mr = -2.0; a sigma = 1 prior
+# would pull it by ~0.1 sigma, hence sigma = 2).
+fit_params:
+  c0:           {fit: true, prior: flat, lo: 1.0, hi: 15.0}          # physical c at the pivot
+  alpha_cm:     {fit: true, prior: gaussian, loc: -0.1,  scale: 0.5}
+  beta_cm:      {fit: true, prior: gaussian, loc: -0.4,  scale: 2.0}
+  gamma_cm:     {fit: true, prior: gaussian, loc: 0.0,   scale: 1.0}
+  log_M_norm:   {fit: true, prior: gaussian, loc: 0.0,   scale: 0.5}  # dex
+  alpha_mr:     {fit: true, prior: gaussian, loc: 1.356, scale: 0.5}
+  beta_mr:      {fit: true, prior: gaussian, loc: -0.30, scale: 2.0}
+  f_mis:        {fit: true, prior: flat, lo: 0.0, hi: 1.0}
+  sigma_off:    {fit: true, prior: flat, lo: 0.0, hi: 1.0}

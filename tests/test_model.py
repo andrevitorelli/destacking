@@ -355,13 +355,13 @@ def test_bin_average_nodes_power_law():
     np.testing.assert_allclose((1.0 / nodes) @ w, 2.0 / (r1 + r2), rtol=1e-5)
 
 
-def test_bin_average_is_default():
-    """The default model is the 4-node area-weighted bin average; bin_nodes=0 is the bin centre."""
+def test_bin_centre_is_default():
+    """The default model is evaluated at the bin centre (bin_nodes=0, since 2026-09-29); 4 nodes = bin average."""
     from destacking.model import _nfw_profiles, BIN_AVERAGE_NODES_DEFAULT
     import xlensing
     z, M, c = np.array([0.3]), np.array([2e14]), np.array([4.0])
-    assert BIN_AVERAGE_NODES_DEFAULT == 4
-    np.testing.assert_array_equal(_nfw_profiles(z, M, c, RADII), _nfw_profiles(z, M, c, RADII, bin_nodes=4))
+    assert BIN_AVERAGE_NODES_DEFAULT == 0
+    np.testing.assert_array_equal(_nfw_profiles(z, M, c, RADII), _nfw_profiles(z, M, c, RADII, bin_nodes=0))
     out = xlensing.model.NFW_Delta_Sigma(M, c, z, np.zeros(1), np.full(1, .1), np.zeros(1), RADII)
     np.testing.assert_allclose(_nfw_profiles(z, M, c, RADII, bin_nodes=0),
                                out["Signal"] - out["Two-halo term"], rtol=1e-12)

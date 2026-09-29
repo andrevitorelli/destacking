@@ -25,7 +25,7 @@ cluster's realised offset, which is not stored.
 
 usage:
   python scripts/auxiliary_scripts/make_controlled_noise_data.py SRC_SIM_SUBDIR DST_SIM_SUBDIR \
-         --mode noiseless|gaussian [--seed 1] [--bin-nodes 4] [--log-inner -0.8 --log-outer 0.6 --n-radii 8]
+         --mode noiseless|gaussian [--seed 1] [--bin-nodes N] [--log-inner -0.8 --log-outer 0.6 --n-radii 8]
 """
 import argparse
 import json
@@ -34,14 +34,15 @@ import shutil
 
 import numpy as np
 
-from destacking.model import _nfw_profiles
+from destacking.model import BIN_AVERAGE_NODES_DEFAULT, _nfw_profiles
 
 ap = argparse.ArgumentParser()
 ap.add_argument("src")
 ap.add_argument("dst")
 ap.add_argument("--mode", choices=["noiseless", "gaussian"], required=True)
 ap.add_argument("--seed", type=int, default=1)
-ap.add_argument("--bin-nodes", type=int, default=4)
+ap.add_argument("--bin-nodes", type=int, default=BIN_AVERAGE_NODES_DEFAULT,
+                help="must match the fit's bin_average_nodes")
 ap.add_argument("--log-inner", type=float, default=-0.8)
 ap.add_argument("--log-outer", type=float, default=0.6)
 ap.add_argument("--n-radii", type=int, default=8)

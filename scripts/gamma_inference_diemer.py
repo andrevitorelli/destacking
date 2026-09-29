@@ -333,10 +333,14 @@ BOOSTS_FILE = _cfg("boosts", "BOOSTS_FILE", None)
 # because the simulations shear sources with isolated haloes only.
 TWO_HALO = _yaml_bool(_cfg("two_halo", "TWO_HALO", False))
 # Area-weighted average of the model over each radial bin (Gauss-Legendre nodes
-# per bin).  Default since 2026-09-28: destacking.model.BIN_AVERAGE_NODES_DEFAULT (4);
-# 0 = evaluate at the bin centre, only to reproduce older fits.
+# per bin).  Default: destacking.model.BIN_AVERAGE_NODES_DEFAULT (0 = bin centre,
+# since 2026-09-29; see the justification there).  4 = the 2026-09-28 averaged model.
 from destacking.model import BIN_AVERAGE_NODES_DEFAULT as _BIN_DEFAULT
 BIN_AVERAGE_NODES = int(_cfg("bin_average_nodes", "BIN_AVERAGE_NODES", _BIN_DEFAULT, cast=int))
+# Target effective posterior sample size per fit (see destacking.fitting.N_EFF_DEFAULT
+# for the justification of the default, 3000 since 2026-09-29; nautilus's own is 10000).
+from destacking.fitting import N_EFF_DEFAULT as _N_EFF_DEFAULT
+N_EFF = int(_cfg("n_eff", "N_EFF", _N_EFF_DEFAULT, cast=int))
 if BOOSTS_FILE is not None:
     with open(BOOSTS_FILE, "rb") as _bf:
         import pickle as _pickle
@@ -705,6 +709,7 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
         bin_nodes=BIN_AVERAGE_NODES,
         n_live=N_LIVE, pool=N_WORKERS,
         verbose=True, filepath=checkpoint, resume=True, timeout=TIMEOUT,
+        n_eff=N_EFF,
     )
     fit_wall_s = time.time() - fit_t0
     converged  = bool(getattr(sampler, "converged", True))
@@ -717,6 +722,8 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
     fit_diag = {
         "fit_wall_s": round(fit_wall_s, 1),
         "timeout_s":  TIMEOUT,
+        "n_eff_target": N_EFF,
+        "bin_average_nodes": BIN_AVERAGE_NODES,
         "converged":  converged,
         "n_like":     int(getattr(sampler, "n_like", -1)),
         "n_eff":      float(getattr(sampler, "n_eff", np.nan)),

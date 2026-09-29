@@ -1,6 +1,18 @@
 import numpy as np
 from destacking.model import BIN_AVERAGE_NODES_DEFAULT
 
+# Target effective posterior sample size for every nautilus run (2026-09-29).
+# nautilus's default is 10000.  n_eff only sets how many posterior draws the
+# sampling phase collects AFTER the exploration phase has located the posterior,
+# so lowering it does not affect whether the posterior is found, only the Monte
+# Carlo noise of posterior summaries.  With ESS n, the MC error of the median is
+# ~1.25 sigma/sqrt(n) and of the 16/84% quantiles ~1.5 sigma/sqrt(n): 0.023 and
+# 0.028 sigma at n=3000 (vs 0.013/0.015 at 10000) -- e.g. ~1e-4 on an LSST-like
+# gamma_cm (sigma ~ 0.005), and further averaged down when bootstrap posteriors
+# are pooled.  The 10000 target cost a large share of each LSST fit's ~18k
+# likelihood calls and pushed fits against their per-fit time budget.
+N_EFF_DEFAULT = 3000
+
 from destacking.model import (
     forward_model, forward_model_mc, forward_model_combined,
     forward_model_diemer,
@@ -141,6 +153,7 @@ def run_sampler(
     n_live=500,
     pool=None,
     verbose=True,
+    n_eff=N_EFF_DEFAULT,
 ):
     """
     Run the nautilus nested sampler to constrain gamma and log_M_norm.
@@ -203,7 +216,7 @@ def run_sampler(
         )
 
     sampler = Sampler(prior, _loglike, n_live=n_live, pool=pool)
-    sampler.run(verbose=verbose)
+    sampler.run(verbose=verbose, n_eff=n_eff)
     return sampler  # gamma sampler
 
 
@@ -262,6 +275,7 @@ def run_sampler_mc(
     n_live=300,
     pool=None,
     verbose=True,
+    n_eff=N_EFF_DEFAULT,
 ):
     """
     Run the nautilus nested sampler to constrain the M–c relation.
@@ -341,7 +355,7 @@ def run_sampler_mc(
         )
 
     sampler = Sampler(prior, _loglike, n_live=n_live, pool=pool)
-    sampler.run(verbose=verbose)
+    sampler.run(verbose=verbose, n_eff=n_eff)
     return sampler
 
 
@@ -461,6 +475,7 @@ def run_sampler_combined(
     filepath=None,
     resume=True,
     timeout=600,
+    n_eff=N_EFF_DEFAULT,
 ):
     """
     Run the nautilus nested sampler for the combined M–c + magnitude-gap model.
@@ -681,7 +696,7 @@ def run_sampler_combined(
         n_live=n_live, pool=pool,
         filepath=filepath, resume=resume,
     )
-    converged = sampler.run(verbose=verbose, timeout=timeout)
+    converged = sampler.run(verbose=verbose, timeout=timeout, n_eff=n_eff)
     # nautilus returns False when stopped by timeout/n_like_max rather
     # than convergence.  Exposed as an attribute to keep the return
     # signature unchanged for existing callers.
@@ -827,6 +842,7 @@ def run_sampler_diemer(
     filepath=None,
     resume=True,
     timeout=600,
+    n_eff=N_EFF_DEFAULT,
 ):
     """
     Run the nautilus nested sampler for the Diemer & Joyce (2019) M-c
@@ -917,7 +933,7 @@ def run_sampler_diemer(
         n_live=n_live, pool=pool,
         filepath=filepath, resume=resume,
     )
-    converged = sampler.run(verbose=verbose, timeout=timeout)
+    converged = sampler.run(verbose=verbose, timeout=timeout, n_eff=n_eff)
     sampler.converged   = bool(converged)
     sampler.param_order = param_order
     try:
@@ -1074,6 +1090,7 @@ def run_sampler_combined_resampled(
     filepath=None,
     resume=True,
     timeout=600,
+    n_eff=N_EFF_DEFAULT,
 ):
     """
     Run the nautilus sampler with a bootstrap-resampled cluster likelihood.
@@ -1154,7 +1171,7 @@ def run_sampler_combined_resampled(
         n_live=n_live, pool=pool,
         filepath=filepath, resume=resume,
     )
-    converged = sampler.run(verbose=verbose, timeout=timeout)
+    converged = sampler.run(verbose=verbose, timeout=timeout, n_eff=n_eff)
     # nautilus returns False when stopped by timeout/n_like_max rather
     # than convergence.  Exposed as an attribute to keep the return
     # signature unchanged for existing callers.
