@@ -347,6 +347,7 @@ _BG_STRATEGY  = None
 _BG_KWARGS    = None
 _SIGMA_E      = None
 _FLOOR_RMAX   = None
+_COVARIANCE   = "bootstrap"
 
 
 def _measure_cluster(args):
@@ -356,7 +357,7 @@ def _measure_cluster(args):
     (i, dv, cov, n_src) or (i, None, None, 0) on failure."""
     import xlensing.cosmo as _xlc
     from xlensing.data import bootstrap_signal, metacal_cluster_lensing
-    from destacking.data import select_background
+    from destacking.data import analytic_signal, select_background
 
     i, cid, ra_deg, dec_deg, z_cl = args
     try:
@@ -407,10 +408,17 @@ def _measure_cluster(args):
         # resamples), which single-handedly dominates the joint likelihood
         # once r_min_fit no longer excludes that bin — see project memory
         # wazp-desy3-root-cause-hypotheses.
-        sigmas, sigmas_cov, _, _ = bootstrap_signal(
-            stake, _BIN_LIMITS, Nboot=_N_COV_BOOT,
-            sigma_e=_SIGMA_E, floor_rmax=_FLOOR_RMAX,
-        )
+        if _COVARIANCE == "analytic":
+            # Direct estimator + diagonal analytic shape-noise covariance with a
+            # POPULATION sigma_e (no individual shapes): the galaxy-bootstrap
+            # covariance correlates with the value it accompanies and biases the
+            # joint fit (destacking.data.analytic_signal, 2026-09-29).
+            sigmas, sigmas_cov = analytic_signal(stake, _BIN_LIMITS, _SIGMA_E, min_gal=3)
+        else:
+            sigmas, sigmas_cov, _, _ = bootstrap_signal(
+                stake, _BIN_LIMITS, Nboot=_N_COV_BOOT,
+                sigma_e=_SIGMA_E, floor_rmax=_FLOOR_RMAX,
+            )
         valid_bins = np.isfinite(sigmas)
         if not valid_bins.any():
             return i, None, None, int(bg["Count"])
@@ -429,7 +437,7 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     ``<sim_subdir>/.partial.npz`` every ``checkpoint_every`` clusters and
     reloaded on a matching re-run (gated by use_cache)."""
     global _TREE, _SR, _RADIUS_MPC, _BIN_LIMITS, _N_COV_BOOT, _MIN_SOURCES
-    global _BG_STRATEGY, _BG_KWARGS, _SIGMA_E, _FLOOR_RMAX
+    global _BG_STRATEGY, _BG_KWARGS, _SIGMA_E, _FLOOR_RMAX, _COVARIANCE
     import multiprocess as mp
     from sklearn.neighbors import BallTree
 
@@ -443,8 +451,25 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     # Shot-noise variance floor for low-galaxy-count bins (see
     # _measure_cluster's comment). None (default) reproduces the old
     # behaviour exactly -- no floor.
-    sigma_e    = _cfg(cfg, "sigma_e", None, cast=float)
     floor_rmax = _cfg(cfg, "floor_rmax", None, cast=float)
+    # covariance: "bootstrap" (default; galaxy bootstrap + optional floor, the
+    # pre-2026-09-29 behaviour) or "analytic" (destacking.data.analytic_signal).
+    # With "analytic", sigma_e may be a number or "population" (default): the
+    # weighted per-component ellipticity dispersion of the whole selected
+    # source catalogue, sqrt(sum w (e1^2+e2^2) / (2 sum w)).
+    covariance = str(_cfg(cfg, "covariance", "bootstrap"))
+    if covariance not in ("bootstrap", "analytic"):
+        raise SystemExit(f"covariance must be 'bootstrap' or 'analytic', got {covariance!r}")
+    sigma_e_raw = _cfg(cfg, "sigma_e", None)
+    if covariance == "analytic" and (sigma_e_raw is None or str(sigma_e_raw) == "population"):
+        w_ = np.asarray(sr["w"], dtype=float)
+        sigma_e = float(np.sqrt(np.sum(w_ * (np.asarray(sr["e1"], float) ** 2
+                                             + np.asarray(sr["e2"], float) ** 2)) / (2 * np.sum(w_))))
+        sigma_e_src = "population (weighted rms of e1, e2 over the selected source catalogue)"
+    else:
+        sigma_e = None if sigma_e_raw is None else float(sigma_e_raw)
+        sigma_e_src = "config"
+    print(f"  measurement: covariance={covariance}, sigma_e={sigma_e} ({sigma_e_src})", flush=True)
 
     # Background-galaxy selection: caller-side now (xlensing applies no
     # redshift filtering internally any more). Default ("margin", factor
@@ -497,7 +522,12 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     _RADIUS_MPC, _BIN_LIMITS = radius_mpc, bin_limits
     _N_COV_BOOT, _MIN_SOURCES = n_cov_bootstrap, min_sources
     _BG_STRATEGY, _BG_KWARGS = bg_strategy, bg_kwargs
-    _SIGMA_E, _FLOOR_RMAX = sigma_e, floor_rmax
+    _SIGMA_E, _FLOOR_RMAX, _COVARIANCE = sigma_e, floor_rmax, covariance
+    os.makedirs(sim_subdir, exist_ok=True)
+    with open(os.path.join(sim_subdir, "measurement.json"), "w") as fh:
+        json.dump({"covariance": covariance, "sigma_e": sigma_e, "sigma_e_source": sigma_e_src,
+                   "radius_mpc": radius_mpc, "floor_rmax": floor_rmax if covariance == "bootstrap" else None,
+                   "estimator": "direct" if covariance == "analytic" else "galaxy-bootstrap mean"}, fh, indent=2)
 
     work = [
         (int(i), int(catalog["ID"][i]), float(catalog["RA"][i]),
