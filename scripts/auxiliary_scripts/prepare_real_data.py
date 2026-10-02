@@ -348,6 +348,9 @@ _BG_KWARGS    = None
 _SIGMA_E      = None
 _FLOOR_RMAX   = None
 _COVARIANCE   = "bootstrap"
+_FLOOR_FORMULA = "legacy"
+_SIGE_EDGES   = None     # per-weight-class sigma_e: class edges in W ...
+_SIGE_VALUES  = None     # ... and the class's measured sigma_e
 
 
 def _measure_cluster(args):
@@ -413,7 +416,27 @@ def _measure_cluster(args):
             # POPULATION sigma_e (no individual shapes): the galaxy-bootstrap
             # covariance correlates with the value it accompanies and biases the
             # joint fit (destacking.data.analytic_signal, 2026-09-29).
-            sigmas, sigmas_cov = analytic_signal(stake, _BIN_LIMITS, _SIGMA_E, min_gal=3)
+            sig_e = _SIGMA_E
+            if _SIGE_EDGES is not None:     # per-galaxy sigma_e from its weight class
+                cls = np.clip(np.searchsorted(_SIGE_EDGES, stake[3], side="right") - 1, 0, len(_SIGE_VALUES) - 1)
+                sig_e = _SIGE_VALUES[cls]
+            sigmas, sigmas_cov = analytic_signal(stake, _BIN_LIMITS, sig_e, min_gal=3)
+        elif _FLOOR_FORMULA == "analytic":
+            # Galaxy bootstrap (mean + covariance), with each bin's variance below
+            # floor_rmax raised, where needed, to the CORRECT shape-noise variance of
+            # the estimator, sigma_e^2 sum (W/Sigma_cr)^2 / [sum R W/Sigma_cr^2]^2
+            # (destacking.data.analytic_signal).  xlensing's built-in floor,
+            # sigma_e^2 / sum R W/Sigma_cr^2, equals it only for unit weights and
+            # responses, and is ~10x too low for DES Y3 metacal weights (2026-10-02).
+            sigmas, sigmas_cov, _, _ = bootstrap_signal(stake, _BIN_LIMITS, Nboot=_N_COV_BOOT)
+            _, an_cov = analytic_signal(stake, _BIN_LIMITS, _SIGMA_E, min_gal=1)
+            an_var = np.diag(an_cov)
+            inner = _BIN_LIMITS[:, 0] < (_FLOOR_RMAX if _FLOOR_RMAX is not None else np.inf)
+            d = np.diag(sigmas_cov).copy()
+            ok = np.isfinite(d) & np.isfinite(an_var) & inner
+            raise_to = np.where(ok & (an_var > d), an_var, d)
+            sigmas_cov = sigmas_cov.copy()
+            sigmas_cov[np.diag_indices_from(sigmas_cov)] = raise_to
         else:
             sigmas, sigmas_cov, _, _ = bootstrap_signal(
                 stake, _BIN_LIMITS, Nboot=_N_COV_BOOT,
@@ -437,7 +460,7 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     ``<sim_subdir>/.partial.npz`` every ``checkpoint_every`` clusters and
     reloaded on a matching re-run (gated by use_cache)."""
     global _TREE, _SR, _RADIUS_MPC, _BIN_LIMITS, _N_COV_BOOT, _MIN_SOURCES
-    global _BG_STRATEGY, _BG_KWARGS, _SIGMA_E, _FLOOR_RMAX, _COVARIANCE
+    global _BG_STRATEGY, _BG_KWARGS, _SIGMA_E, _FLOOR_RMAX, _COVARIANCE, _FLOOR_FORMULA, _SIGE_EDGES, _SIGE_VALUES
     import multiprocess as mp
     from sklearn.neighbors import BallTree
 
@@ -460,12 +483,32 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     covariance = str(_cfg(cfg, "covariance", "bootstrap"))
     if covariance not in ("bootstrap", "analytic"):
         raise SystemExit(f"covariance must be 'bootstrap' or 'analytic', got {covariance!r}")
+    # floor_formula (covariance: bootstrap only): "legacy" (xlensing's
+    # sigma_e^2 / sum R W/Sigma_cr^2, the pre-2026-10-02 behaviour) or "analytic"
+    # (the estimator's correct shape-noise variance; see _measure_cluster).
+    floor_formula = str(_cfg(cfg, "floor_formula", "legacy"))
     sigma_e_raw = _cfg(cfg, "sigma_e", None)
-    if covariance == "analytic" and (sigma_e_raw is None or str(sigma_e_raw) == "population"):
+    if (covariance == "analytic" or floor_formula == "analytic") and (sigma_e_raw is None or str(sigma_e_raw) == "population"):
         w_ = np.asarray(sr["w"], dtype=float)
         sigma_e = float(np.sqrt(np.sum(w_ * (np.asarray(sr["e1"], float) ** 2
                                              + np.asarray(sr["e2"], float) ** 2)) / (2 * np.sum(w_))))
         sigma_e_src = "population (weighted rms of e1, e2 over the selected source catalogue)"
+    elif str(sigma_e_raw) == "per_weight_class":
+        # sigma_e per class of the metacal weight W (which DES Y3 sets from each
+        # galaxy's S/N and size): quantile classes of W, and in each the weighted
+        # rms of e1, e2 -- a per-galaxy, data-constrained shape noise (2026-10-02).
+        n_cls = int(_cfg(cfg, "sigma_e_classes", 50, cast=int))
+        w_ = np.asarray(sr["w"], dtype=float)
+        e2_ = (np.asarray(sr["e1"], float) ** 2 + np.asarray(sr["e2"], float) ** 2) / 2
+        edges = np.quantile(w_, np.linspace(0, 1, n_cls + 1)); edges[0] = -np.inf
+        cls = np.clip(np.searchsorted(edges, w_, side="right") - 1, 0, n_cls - 1)
+        vals = np.sqrt(np.bincount(cls, weights=w_ * e2_, minlength=n_cls) / np.bincount(cls, weights=w_, minlength=n_cls))
+        _SIGE_EDGES, _SIGE_VALUES = edges, vals
+        sigma_e = float(np.sqrt(np.sum(w_ * e2_) / np.sum(w_)))      # population value, for the record
+        sigma_e_src = (f"per weight class ({n_cls} quantile classes of W); class sigma_e "
+                       f"{vals.min():.3f}-{vals.max():.3f}, population {sigma_e:.3f}")
+        print("  sigma_e by weight class (W range: sigma_e): " + ", ".join(
+            f"{edges[k + 1] if k < n_cls - 1 else np.inf:.1f}:{vals[k]:.3f}" for k in range(0, n_cls, max(1, n_cls // 10))), flush=True)
     else:
         sigma_e = None if sigma_e_raw is None else float(sigma_e_raw)
         sigma_e_src = "config"
@@ -522,10 +565,11 @@ def measure_all_clusters(catalog, sr, cfg, sim_subdir):
     _RADIUS_MPC, _BIN_LIMITS = radius_mpc, bin_limits
     _N_COV_BOOT, _MIN_SOURCES = n_cov_bootstrap, min_sources
     _BG_STRATEGY, _BG_KWARGS = bg_strategy, bg_kwargs
-    _SIGMA_E, _FLOOR_RMAX, _COVARIANCE = sigma_e, floor_rmax, covariance
+    _SIGMA_E, _FLOOR_RMAX, _COVARIANCE, _FLOOR_FORMULA = sigma_e, floor_rmax, covariance, floor_formula
     os.makedirs(sim_subdir, exist_ok=True)
     with open(os.path.join(sim_subdir, "measurement.json"), "w") as fh:
-        json.dump({"covariance": covariance, "sigma_e": sigma_e, "sigma_e_source": sigma_e_src,
+        json.dump({"covariance": covariance, "floor_formula": floor_formula if covariance == "bootstrap" else None,
+                   "sigma_e": sigma_e, "sigma_e_source": sigma_e_src,
                    "radius_mpc": radius_mpc, "floor_rmax": floor_rmax if covariance == "bootstrap" else None,
                    "estimator": "direct" if covariance == "analytic" else "galaxy-bootstrap mean"}, fh, indent=2)
 
