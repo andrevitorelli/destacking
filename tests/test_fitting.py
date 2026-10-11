@@ -592,3 +592,22 @@ def test_run_sampler_combined_resampled_runs_and_returns_finite(combined_dataset
     assert np.any(np.isfinite(log_w))
     assert not np.any(np.isnan(log_w))
     assert hasattr(sampler, "converged")
+
+
+def test_sellentin_heavens_diag_formula_and_gaussian_limit():
+    """Per-bin Sellentin & Heavens likelihood (2026-10-11): matches the real-data formula (joint_sh.py), keeps the
+    Gaussian for flagged / n_k<2 bins, ignores NaN bins, and tends to the Gaussian quadratic form for large n_k."""
+    from destacking.fitting import sellentin_heavens_diag, cholog_gaussian
+    rng = np.random.default_rng(1)
+    N, K = 200, 6
+    v = rng.uniform(0.5, 2, (N, K))
+    cov = np.zeros((N, K, K)); cov[:, range(K), range(K)] = v
+    r = rng.normal(size=(N, K)) * np.sqrt(v); r[rng.random((N, K)) < 0.1] = np.nan
+    n = rng.integers(1, 30, (N, K)).astype(float); g = rng.random((N, K)) < 0.2
+    ok = np.isfinite(r); q = np.where(ok, r ** 2 / v, 0); sh = ok & ~g & (n >= 2); ga = ok & ~sh
+    ref = -0.5 * np.sum(n[sh] * np.log1p(q[sh] / (n[sh] - 1))) - 0.5 * np.sum(q[ga])
+    assert np.isclose(sellentin_heavens_diag(r, cov, n, g), ref)
+    big = np.full((N, K), 1e7); z = np.zeros((N, K), bool)
+    d_sh = sellentin_heavens_diag(r + 0.3, cov, big, z) - sellentin_heavens_diag(r, cov, big, z)
+    d_g = cholog_gaussian(r + 0.3, cov) - cholog_gaussian(r, cov)
+    assert np.isclose(d_sh, d_g, rtol=1e-5)

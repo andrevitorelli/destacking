@@ -339,6 +339,16 @@ BOOSTS_FILE = _cfg("boosts", "BOOSTS_FILE", None)
 # which contain the two-halo signal; false (default) for simulated data,
 # because the simulations shear sources with isolated haloes only.
 TWO_HALO = _yaml_bool(_cfg("two_halo", "TWO_HALO", False))
+# Likelihood (2026-10-11): "auto" (default), "sellentin_heavens" or "gaussian".  Sellentin & Heavens (2016) is the
+# standard for ESTIMATED (galaxy-bootstrap) variances: per bin, it marginalises over the variance given the n_k sources
+# it was estimated from, and floored bins stay Gaussian.  With a Gaussian likelihood, DES-like bootstrap fits are
+# dominated by a few clusters whose bootstrap variance collapses (2026-10-11 v1.1 test).  "auto" uses Sellentin-Heavens
+# for bootstrap covariances and the Gaussian for analytic ones, whose variances are computed, not estimated.  It needs
+# bin_counts.npz (n_k, floored) in the data folder or its parent (scripts/auxiliary_scripts/sim_bin_counts.py for sims).
+LIKELIHOOD = str(_cfg("likelihood", "LIKELIHOOD", "auto")).lower()
+if LIKELIHOOD not in ("auto", "gaussian", "sellentin_heavens"):
+    raise ValueError(f"likelihood must be auto, sellentin_heavens or gaussian, not {LIKELIHOOD!r}")
+SH_FIT = {}   # per-gamma n_k / floored arrays on the fit bins, set by infer_one_gamma
 # Area-weighted average of the model over each radial bin (Gauss-Legendre nodes
 # per bin).  Default: destacking.model.BIN_AVERAGE_NODES_DEFAULT (0 = bin centre,
 # since 2026-09-29; see the justification there).  4 = the 2026-09-28 averaged model.
@@ -396,11 +406,19 @@ FLOOR_RMAX      = _cfg("floor_rmax", "FLOOR_RMAX", None, cast=float)
 # all.  Defaults reproduce every existing simulation exactly.
 SIGMA_LNLAMBDA_INTR   = float(_cfg("sigma_lnlambda_intr", "SIGMA_LNLAMBDA_INTR",
                                    0.0, cast=float))
+# Magnitude-gap realism test (2026-10-02): path to an npz with 'dm' and 'err' arrays of the real
+# sample; see destacking.simulation.SimulationConfig.delta_m_reference.  Empty (default) = off.
+DELTA_M_REFERENCE = str(_cfg("delta_m_reference", "DELTA_M_REFERENCE", "", cast=str)) or None
+DELTA_M_NOISE_SCALE = float(_cfg("delta_m_noise_scale", "DELTA_M_NOISE_SCALE", 1.0, cast=float))
 FIT_OBSERVED_RICHNESS = _yaml_bool(_cfg("fit_observed_richness",
                                         "FIT_OBSERVED_RICHNESS", False))
 # Triaxial shear model for simulations: "exact" (default; see
 # destacking.simulation.SimulationConfig.triaxial_shear_model) or "pseudo".
 TRIAXIAL_SHEAR_MODEL = str(_cfg("triaxial_shear_model", "TRIAXIAL_SHEAR_MODEL", "exact"))
+# Magnitude-gap model and injection centre (paper 1.1; see destacking.simulation.SimulationConfig).
+DM_MODEL = str(_cfg("dm_model", "DM_MODEL", "powerlaw", cast=str))
+SIGMA_LOGL_BCG = float(_cfg("sigma_logL_bcg", "SIGMA_LOGL_BCG", 0.12, cast=float))
+DM_CENTER = float(_cfg("dm_center", "DM_CENTER", 0.0, cast=float))
 # Seed offset for independent realisations (2026-09-29).  Every random stage
 # of the simulation is seeded from the per-gamma index g_idx (position in the
 # gamma list), so two runs with the same gamma list -- e.g. every campaign job,
@@ -670,6 +688,8 @@ SIM_CFG = SimulationConfig(
     logm_range=WAZP_LOGM_RANGE,
     lambda_min=WAZP_LAMBDA_MIN,
     delta_m_ref=DELTA_M_REF,
+    delta_m_reference=DELTA_M_REFERENCE,
+    delta_m_noise_scale=DELTA_M_NOISE_SCALE,
     density=DENSITY,
     shape_noise=SHAPE_NOISE,
     width_rad=WIDTH_RAD,
@@ -688,6 +708,9 @@ SIM_CFG = SimulationConfig(
     floor_rmax=FLOOR_RMAX,
     sigma_lnlambda_intr=SIGMA_LNLAMBDA_INTR,
     triaxial_shear_model=TRIAXIAL_SHEAR_MODEL,
+    dm_model=DM_MODEL,
+    sigma_logL_bcg=SIGMA_LOGL_BCG,
+    dm_center=DM_CENTER,
 )
 
 
@@ -813,6 +836,8 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
         n_live=N_LIVE, pool=N_WORKERS,
         verbose=True, filepath=checkpoint, resume=True, timeout=TIMEOUT,
         n_eff=N_EFF,
+        sh_counts=SH_FIT["n"][idx_boot] if SH_FIT else None,
+        sh_gauss=SH_FIT["g"][idx_boot] if SH_FIT else None,
     )
     fit_wall_s = time.time() - fit_t0
     converged  = bool(getattr(sampler, "converged", True))
@@ -827,6 +852,7 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
         "timeout_s":  TIMEOUT,
         "n_eff_target": N_EFF,
         "bin_average_nodes": BIN_AVERAGE_NODES,
+        "likelihood": "sellentin_heavens" if SH_FIT else "gaussian",
         "converged":  converged,
         "n_like":     int(getattr(sampler, "n_like", -1)),
         "n_eff":      float(getattr(sampler, "n_eff", np.nan)),
@@ -873,6 +899,7 @@ def run_one_bootstrap(b_idx, sim_subdir, gamma_true, ols,
     # Persist the full posterior (all param_order columns) so the corner
     # plot can be regenerated later without re-running nautilus.
     np.savez_compressed(npz_path,
+                        dm_form=__import__('destacking.dmform', fromlist=['DM_FORM']).DM_FORM,
                         gamma_samples=gamma_s,
                         weights=weights,
                         all_samples=points,
@@ -1008,6 +1035,11 @@ def simulate_one_gamma(g_idx, gamma_true, sim_subdir):
     save_simulation_checkpoint(
         sim_subdir, truth, ols, cluster_obs, data_vectors, cov_matrices
     )
+    # Source counts / floor flags for the (default) Sellentin-Heavens likelihood of the bootstrap covariance.
+    from destacking.data import bin_counts_from_backgrounds
+    nk, floored = bin_counts_from_backgrounds(
+        bgs, SIM_CFG.bin_limits, np.einsum("nii->ni", cov_matrices), SIM_CFG.shape_noise, SIM_CFG.floor_rmax)
+    np.savez(os.path.join(sim_subdir, "bin_counts.npz"), n_k=nk, floored=floored, bin_limits=np.asarray(SIM_CFG.bin_limits))
 
     # Also write notebook-compatible per-gamma sim data so the
     # wazp_lensing_signals / wazp_mass_richness_by_delta_m notebooks
@@ -1064,6 +1096,19 @@ def _apply_boost_correction(cluster_obs, data_vectors_fit, cov_matrices_fit,
     return data_vectors_fit, cov_matrices_fit
 
 
+def _covariance_kind(data_subdir, ols):
+    """"analytic" or "bootstrap": measurement.json (prepare_real_data.py), else ols.json's "remeasured" block
+    (remeasure_checkpoint.py, analytic), else "bootstrap" (simulate_lensing's galaxy bootstrap)."""
+    mj = os.path.join(data_subdir, "measurement.json")
+    if os.path.exists(mj):
+        with open(mj) as fh:
+            return "analytic" if str(json.load(fh).get("covariance", "")).startswith("analytic") else "bootstrap"
+    rem = ols.get("remeasured") if isinstance(ols, dict) else None
+    if rem and str(rem.get("covariance", "")).startswith("analytic"):
+        return "analytic"
+    return "bootstrap"
+
+
 def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
     """Inference phase for one gamma: read the checkpointed data from
     ``data_subdir``, run N_BOOTSTRAP bootstrap nautilus fits, and combine
@@ -1107,6 +1152,27 @@ def infer_one_gamma(g_idx, gamma_true, data_subdir, out_subdir, run_t0=None):
     RADII_fit        = FIT_RADII[keep]
     data_vectors_fit = data_vectors[:, keep].copy()
     cov_matrices_fit = cov_matrices[:, keep][:, :, keep]
+
+    SH_FIT.clear()
+    cov_kind = _covariance_kind(data_subdir, ols)
+    likelihood = LIKELIHOOD if LIKELIHOOD != "auto" else ("gaussian" if cov_kind == "analytic" else "sellentin_heavens")
+    if likelihood == "sellentin_heavens" and cov_kind == "analytic":
+        raise RuntimeError(f"likelihood: sellentin_heavens on the analytic covariance of {data_subdir}: its variances "
+                           "are computed, not estimated -- use gaussian (or auto)")
+    print(f"    covariance: {cov_kind} -> likelihood: {likelihood}", flush=True)
+    if likelihood == "sellentin_heavens":
+        bcp = [p for p in (os.path.join(data_subdir, "bin_counts.npz"),
+                           os.path.join(os.path.dirname(os.path.normpath(data_subdir)), "bin_counts.npz")) if os.path.exists(p)]
+        if not bcp:
+            raise RuntimeError(f"Sellentin-Heavens likelihood needs bin_counts.npz in {data_subdir} or its parent "
+                               "(scripts/auxiliary_scripts/sim_bin_counts.py), or set likelihood: gaussian explicitly")
+        bc = np.load(bcp[0])
+        if bc["n_k"].shape != data_vectors.shape:
+            raise RuntimeError(f"bin_counts.npz shape {bc['n_k'].shape} != data {data_vectors.shape} in {data_subdir}")
+        SH_FIT["n"] = bc["n_k"][:, keep].astype(float)
+        SH_FIT["g"] = bc["floored"][:, keep].astype(bool)
+        print(f"    Sellentin-Heavens likelihood: floored (Gaussian) fraction per bin "
+              + " ".join(f"{x:.3f}" for x in SH_FIT["g"].mean(0)), flush=True)
 
     if WILD_OUTLIER_MASK:
         inner = RADII_fit < WILD_OUTLIER_RMAX

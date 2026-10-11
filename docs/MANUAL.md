@@ -278,6 +278,7 @@ in `prepare_real_data.py`). Every key below is enumerated directly from
 | `r_min_fit` | 0.5 | Minimum radius [Mpc] entering the likelihood (bins below are measured but excluded) |
 | `wild_outlier_mask` | `false` | Mask individual (cluster, bin) entries outside a value range instead of a hard radius cut — **found statistically invalid with a one-sided range in project history; if ever re-enabled, the range must be two-sided** (see §7) |
 | `wild_outlier_rmax`/`wild_outlier_min`/`wild_outlier_max` | 0.5/0.0/10000.0 | Range/scope for the above |
+| `likelihood` | `auto` | `auto`: per-bin Sellentin & Heavens (2016) likelihood for galaxy-bootstrap covariances, Gaussian for analytic ones; or force `sellentin_heavens` / `gaussian`. Sellentin–Heavens needs `bin_counts.npz` (source counts + floor flags) in the data folder or its parent — written by the simulation phase, or by `scripts/auxiliary_scripts/sim_bin_counts.py` for older checkpoints (see §7) |
 | `boosts` | `None` | Path to a `wazp_stacked_analysis.py` Stage-2b boost_fits pickle; applies per-cluster boost(R) by `stack_name` lookup (see §3) |
 | `z_cluster_range` | `[0.10, 0.60]` | Cluster redshift range (simulation) |
 | `f_mis`/`sigma_off` (via `fit_params`, see below) | — | Fit-model miscentering assumption |
@@ -378,6 +379,14 @@ fixed varies by config.
   implausibly tiny bootstrap variance and dominate the entire joint
   likelihood — see `prepare_real_data.py`'s inline comment on
   `sigma_e`/`floor_rmax`).
+- **Bootstrap covariances need the Sellentin–Heavens likelihood (2026-10-11).** With a Gaussian
+  likelihood, DES-like joint fits on galaxy-bootstrap covariances are dominated by the few clusters
+  whose bootstrap variance collapses in the first bin outside `floor_rmax` (down to ~1/2000 of the
+  shape-noise variance): fits crash in nautilus or converge with parameter scatter several times the
+  posterior widths. The per-bin Sellentin–Heavens likelihood (`likelihood: auto`, the default)
+  marginalises over each estimated variance given its source count and recovers gamma_cm as well as
+  the analytic covariance in the v1.1 scan (84 DES-like + 60 LSST-like realisations). Floored bins
+  keep the Gaussian, since their variance is not an estimate. Analytic covariances keep the Gaussian.
 - **The stack-level c–M relation from
   `notebooks/wazp_mass_richness_by_delta_m.ipynb` is flagged internally as
   unphysical** (project history, suspected DES-Y3 high-shear calibration

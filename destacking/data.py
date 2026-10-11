@@ -221,3 +221,33 @@ def analytic_signal(stake, bin_limits, sigma_e, min_gal=3):
     dv = np.where(ok, num / np.where(ok, den, 1.0), np.nan)
     v = np.where(ok, var / np.where(ok, den, 1.0) ** 2, 1.0)
     return dv, np.diag(v)
+
+
+def bin_counts_from_backgrounds(bgs, bin_limits, variances, sigma_e, floor_rmax=0.5):
+    """Per-cluster, per-bin source counts and floor flags for the Sellentin & Heavens likelihood (2026-10-11).
+
+    ``bgs`` is a list (index = cluster row) or a dict {cluster row: stake} of xlensing stakes (rows Sigma_crit, e_t,
+    e_x, W, R, M), ``variances`` the (N, Nbins) bootstrap variances of the checkpoint.  A bin is flagged as floored when
+    its lower edge is below ``floor_rmax`` and its variance equals the shape-noise floor
+    sigma_e^2 / sum((1+M) W / Sigma_crit^2) of xlensing.data.bootstrap_signal; such a bin's variance is not an estimate,
+    so it keeps the Gaussian likelihood.  Returns (n_k int array, floored bool array), both (N, Nbins).
+    """
+    bl = np.asarray(bin_limits, dtype=float)
+    var = np.asarray(variances, dtype=float)
+    n_cl, n_b = var.shape
+    nk = np.zeros((n_cl, n_b), int)
+    floor = np.full((n_cl, n_b), np.nan)
+    items = bgs.items() if isinstance(bgs, dict) else enumerate(bgs)
+    for cid, st in items:
+        i = int(cid)
+        if st is None or not (0 <= i < n_cl):
+            continue
+        sig, w, R, M = (np.asarray(st[k], dtype=float) for k in (0, 3, 4, 5))
+        inb = (R[:, None] > bl[:, 0]) & (R[:, None] < bl[:, 1])
+        nk[i] = inb.sum(0)
+        K = ((1.0 + M) * w / sig ** 2).astype(np.float32).astype(float) @ inb   # float32 as in bootstrap_signal
+        floor[i] = np.where(K > 0, sigma_e ** 2 / np.where(K > 0, K, 1.0), np.nan)
+    rmax = np.inf if floor_rmax is None else floor_rmax
+    floored = ((bl[:, 0] < rmax)[None, :] & np.isfinite(floor) & np.isfinite(var)
+               & (np.abs(var - floor) <= 1e-4 * floor))
+    return nk, floored

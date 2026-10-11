@@ -384,9 +384,14 @@ def log_likelihood_combined(
     BCG_B_MASS=None,
     two_halo=False,
     bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
+    sh_counts=None,
+    sh_gauss=None,
 ):
     """
     Log-likelihood for the combined M–c + magnitude-gap model.
+
+    With ``sh_counts`` (per-cluster, per-bin source counts) the per-bin Sellentin & Heavens likelihood replaces the
+    Gaussian; ``sh_gauss`` flags the bins that keep the Gaussian (see sellentin_heavens_diag).
 
     FMISS, SIGMA_OFF, BCG_B_MASS are passed through to forward_model_combined
     as fixed per-cluster miscentering / BCG arrays.  Default None means
@@ -413,10 +418,31 @@ def log_likelihood_combined(
         if not np.all(np.isfinite(model)):
             return -np.inf
         residuals = data_vectors - model
-        ll = cholog_gaussian(residuals, cov_matrices)
+        if sh_counts is not None:
+            ll = sellentin_heavens_diag(residuals, cov_matrices, sh_counts, sh_gauss)
+        else:
+            ll = cholog_gaussian(residuals, cov_matrices)
         return ll if np.isfinite(ll) else -np.inf
     except Exception:
         return -np.inf
+
+
+def sellentin_heavens_diag(residuals, cov_matrices, n_k, gauss):
+    """Per-bin Sellentin & Heavens (2016) log-likelihood for estimated diagonal variances (2026-10-11).
+
+    For cluster i and bin k, with residual r, estimated variance s2 and n_k sources in the bin,
+        ln L_ik = -(n_k / 2) ln[1 + r^2 / (s2 (n_k - 1))],
+    the likelihood marginalised over the true variance given the estimated one.  Bins flagged in ``gauss`` (variance set
+    by the shape-noise floor, not estimated) and bins with n_k < 2 keep the Gaussian -r^2 / (2 s2).  Off-diagonal
+    covariance terms are ignored, as in the real-data fit (joint_sh.py), whose formula this reproduces.  NaN residuals
+    (masked bins) contribute nothing.  Parameter-independent normalisations are dropped.
+    """
+    v = np.einsum("nii->ni", cov_matrices)
+    ok = np.isfinite(residuals) & np.isfinite(v) & (v > 0)
+    q = np.where(ok, residuals ** 2 / np.where(ok, v, 1.0), 0.0)
+    sh = ok & ~gauss & (n_k >= 2)
+    ga = ok & ~sh
+    return float(-0.5 * np.sum(n_k[sh] * np.log1p(q[sh] / (n_k[sh] - 1))) - 0.5 * np.sum(q[ga]))
 
 
 # Every parameter the combined model exposes, in the order they are added
@@ -476,6 +502,8 @@ def run_sampler_combined(
     resume=True,
     timeout=600,
     n_eff=N_EFF_DEFAULT,
+    sh_counts=None,
+    sh_gauss=None,
 ):
     """
     Run the nautilus nested sampler for the combined M–c + magnitude-gap model.
@@ -689,6 +717,8 @@ def run_sampler_combined(
             BCG_B_MASS=BCG_B_MASS,
             two_halo=two_halo,
             bin_nodes=bin_nodes,
+            sh_counts=sh_counts,
+            sh_gauss=sh_gauss,
         )
 
     sampler = Sampler(
