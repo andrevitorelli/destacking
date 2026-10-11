@@ -311,6 +311,7 @@ def test_forward_model_diemer_passes_FMISS_through(test_dataset):
 
 
 def test_forward_model_diemer_nan_delta_m_falls_back_to_ref():
+    from destacking.dmform import DM_FORM
     # Clusters with no detected satellite (delta_m=NaN) get no gamma
     # correction -- same convention as forward_model_combined.
     from astropy.table import Table
@@ -322,7 +323,8 @@ def test_forward_model_diemer_nan_delta_m_falls_back_to_ref():
     cluster_obs_ref = Table({
         "z":       np.array([0.3]),
         "Lambda":  np.array([40.0]),
-        "delta_m": np.array([1.0]),   # == default delta_m_ref
+        # zero regressor: delta_m = 0 in the linear form (paper 1.1), = default delta_m_ref (1.0) in the log form
+        "delta_m": np.array([0.0 if DM_FORM == "linear" else 1.0]),
     })
     p_nan = forward_model_diemer(0.5, cluster_obs_nan, RADII)
     p_ref = forward_model_diemer(0.5, cluster_obs_ref, RADII)

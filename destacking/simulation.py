@@ -1,5 +1,6 @@
 import numpy as np
 from astropy import table
+from destacking.dmform import dm_regressor
 from destacking.relations import (
     c_DuttonMaccio,
     lum_BCG_zheng07,
@@ -36,6 +37,52 @@ def _sample_powerlaw_lf(N, alpha, L_min, L_max, rng):
     return (u * (Lmax_p - Lmin_p) + Lmin_p) ** (1.0 / ap1)
 
 
+_H_PLANCK18 = 0.6766   # little h of xlensing.cosmo's Planck18 (Zheng+07 relations are in h units)
+
+
+def _gap_zheng07(M_halo, sigma_logL, rng):
+    """Physical magnitude gaps (paper 1.1, "option C").
+
+    Central: Zheng+07 central luminosity vs HALO mass (relations.lum_BCG_zheng07, h^-1 Msun in,
+    h^-2 Lsun out) with lognormal scatter sigma_logL [dex].  Satellites: Poisson process in magnitude
+    whose cumulative mean N(<M_r) interpolates (linearly in ln N) the Zheng+07 satellite occupations
+    at thresholds M_r - 5 log h < -18, -21, -22 (extrapolated brightward with the -21/-22 slope);
+    the brightest and second-brightest satellites sit at cumulative counts E1 ~ Exp(1),
+    E2 = E1 + Exp(1).  Clusters with no satellite brighter than -18 are flagged (ok=False).
+    The gap is observer-defined: BCG = brightest galaxy, Delta_m = 2nd brightest - brightest (>= 0).
+    Returns ok, L_brightest [Lsun], L_second [Lsun], delta_m [mag], N_sat (satellites < -18).
+    """
+    from scipy.special import erf
+    Mh = np.asarray(M_halo, float) * _H_PLANCK18
+    n = len(Mh)
+    th = np.array([-18.0, -21.0, -22.0])
+    lnN = []
+    for key in ("SDSS18.0", "SDSS21.0", "SDSS22.0"):
+        p = HOD_samples[key]
+        cen = 0.5 * (1.0 + erf((np.log10(Mh) - p["logM_min"]) / p["sigma_logM"]))
+        nsat = cen * np.clip((Mh - 10 ** p["logM_0"]) / 10 ** p["logM_1"], 0.0, None) ** p["alpha"]
+        lnN.append(np.log(np.maximum(nsat, 1e-6)))
+    lnN = np.array(lnN)
+    s1 = (lnN[1] - lnN[0]) / (th[1] - th[0])
+    s2 = (lnN[2] - lnN[1]) / (th[2] - th[1])
+
+    def mag_at(cum):
+        l = np.log(cum)
+        return np.where(l >= lnN[1], th[0] + (l - lnN[0]) / s1, th[1] + (l - lnN[1]) / s2)
+
+    E1 = rng.exponential(size=n)
+    E2 = E1 + rng.exponential(size=n)
+    M1, M2 = mag_at(E1), mag_at(E2)
+    Mc = 4.65 - 2.5 * (np.log10(lum_BCG_zheng07(Mh)) + sigma_logL * rng.normal(size=n))
+    N18 = np.exp(lnN[0])
+    ok = E1 < N18
+    N_sat = np.where(ok, 1 + rng.poisson(np.maximum(N18 - E1, 0.0)), 0)
+    m_first = np.minimum(Mc, M1)
+    m_second = np.where(Mc <= M1, M1, np.minimum(Mc, M2))
+    to_L = lambda m: 10.0 ** (-0.4 * (m - 4.65)) / _H_PLANCK18 ** 2
+    return ok, to_L(m_first), to_L(m_second), m_second - m_first, N_sat
+
+
 def _pivot_from_delta_m(delta_m, c_pivot_0, delta_m_ref, gamma):
     """
     Magnitude-gap-dependent pivot parameter for c_DuttonMaccio.
@@ -44,11 +91,7 @@ def _pivot_from_delta_m(delta_m, c_pivot_0, delta_m_ref, gamma):
 
     Clusters with no detected satellites (Δm = NaN) fall back to c_pivot_0.
     """
-    finite = np.isfinite(delta_m)
-    c_param = np.full(len(delta_m), c_pivot_0, dtype=float)
-    dm = np.where(finite, delta_m, delta_m_ref)   # safe placeholder
-    c_param[finite] = c_pivot_0 * (dm[finite] / delta_m_ref) ** gamma
-    return c_param
+    return c_pivot_0 * 10.0 ** (gamma * dm_regressor(delta_m, delta_m_ref))
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +128,8 @@ def generate_truth_catalog(
     sat_alpha=-1.2,
     sat_L_min=1e8,
     seed=None,
+    dm_model="powerlaw",
+    sigma_logL_bcg=0.12,
 ):
     """
     Generate a random truth catalog of N galaxy clusters.
@@ -130,6 +175,12 @@ def generate_truth_catalog(
         Minimum satellite luminosity [L_sun] (survey detection limit).
     seed : int or None
         Random seed for reproducibility.
+    dm_model : str
+        "powerlaw" (paper 1.0): BCG luminosity from lum_BCG_zheng07 of the BCG stellar mass and
+        satellites from phi ~ L^sat_alpha capped at L_BCG.  "zheng07" (paper 1.1): see _gap_zheng07;
+        L_BCG / L_brightest_sat are then the brightest / second-brightest galaxy.
+    sigma_logL_bcg : float
+        Central-luminosity scatter [dex] for dm_model="zheng07".
 
     Returns
     -------
@@ -164,6 +215,16 @@ def generate_truth_catalog(
         log_M_BCG_try = 0.4 * np.log10(M_halo_try) + 6.0 + rng.normal(0.0, 0.15, n_try)
         M_BCG_try     = 10.0 ** log_M_BCG_try
         L_BCG_try     = lum_BCG_zheng07(M_BCG_try)
+
+        if dm_model == "zheng07":
+            ok, L1, L2, dm_try, nsat_try = _gap_zheng07(M_halo_try, sigma_logL_bcg, rng)
+            for i in np.flatnonzero(ok)[:N - len(z_keep)]:
+                z_keep.append(z_try[i]); M_halo_keep.append(M_halo_try[i]); M_BCG_keep.append(M_BCG_try[i])
+                L_BCG_keep.append(L1[i]); L_sat_keep.append(L2[i]); delta_m_keep.append(dm_try[i])
+                N_sat_keep.append(int(nsat_try[i]))
+            continue
+        if dm_model != "powerlaw":
+            raise ValueError(f"dm_model must be 'powerlaw' or 'zheng07', got {dm_model!r}")
 
         _, N_sat_try = sample_zheng07_batch(M_halo_try, HOD_sample)
 
@@ -392,6 +453,22 @@ from destacking.utils import deterministic_seed as _seed
 # to avoid a circular import at load time.
 
 
+
+def _map_delta_m_to_reference(dm_hat, ref_dm, ref_err, rng, noise_scale=1.0):
+    """Rank-preserving map of simulated delta_m onto a reference sample; returns (true, observed).
+
+    The i-th smallest value of ``dm_hat`` receives the quantile-matched value of ``ref_dm`` together
+    with that reference cluster's uncertainty ``ref_err``; the observed value adds a Gaussian error
+    of that size.  The ranking (hence the HOD's correlation of delta_m with mass and richness) is kept.
+    """
+    order = np.argsort(np.argsort(dm_hat))
+    idx = np.minimum((order * len(ref_dm)) // len(dm_hat), len(ref_dm) - 1)
+    srt = np.argsort(ref_dm)
+    true = np.asarray(ref_dm, float)[srt][idx]
+    err = np.asarray(ref_err, float)[srt][idx]
+    return true, true + noise_scale * rng.normal(0.0, err)
+
+
 @dataclass
 class SimulationConfig:
     """Everything the survey-simulation pipeline needs to know.
@@ -438,6 +515,16 @@ class SimulationConfig:
     # simulations have perfect knowledge of which galaxies are background
     # sources and so have nothing to correct for.
     floor_rmax: float = None
+    # Magnitude-gap realism test (2026-10-02).  None (default) keeps the HOD's own
+    # exact delta_m.  A path to an npz with arrays 'dm' and 'err' (the real WaZP
+    # DELTA_M_I and DELTA_M_I_ERR of the sample) makes the simulation (i) map every
+    # cluster's HOD delta_m, rank for rank, onto the real distribution -- this is
+    # the TRUE delta_m that drives the injected concentration -- carrying the real
+    # per-cluster uncertainty along with it, and (ii) give the fit and the stacks
+    # the OBSERVED delta_m = true + N(0, err), as the real data are measured.
+    # Clusters with observed delta_m <= 0 are dropped, as in the real analysis.
+    delta_m_reference: str = None
+    delta_m_noise_scale: float = 1.0   # 0 = the observed delta_m equals the true one (control)
     # Lognormal intrinsic scatter in ln(Lambda) at fixed mass, applied in
     # the selection draw (build_truth_catalog -> make_test_data).  0.0
     # (default) reproduces every existing simulation exactly.
@@ -447,6 +534,14 @@ class SimulationConfig:
     # with the line-of-sight amplitude) or "pseudo" (the earlier pseudo-elliptical
     # approximation, ~19% low on average; only to reproduce older campaigns).
     triaxial_shear_model: str = "exact"
+    # Magnitude-gap model (paper 1.1, 2026-10-10): "powerlaw" (default, paper 1.0) or "zheng07"
+    # (physical gaps; see _gap_zheng07), with central-luminosity scatter sigma_logL_bcg [dex].
+    dm_model: str = "powerlaw"
+    sigma_logL_bcg: float = 0.12
+    # Injection centre [same units as the regressor]: log10 c = log10 c_DM14 + gamma * (regressor - dm_center).
+    # 0 (default) reproduces earlier campaigns; the fit model has a free c0 and no pivot, so only the
+    # OLS truth c0 moves.
+    dm_center: float = 0.0
 
     @property
     def n_bins(self):
@@ -475,6 +570,7 @@ def build_truth_catalog(gamma_true, g_idx, cfg):
             logM_range=cfg.logm_range,
             delta_m_gamma=0.0, scatter_logc=0.0,
             seed=_seed(g_idx, batch),
+            dm_model=cfg.dm_model, sigma_logL_bcg=cfg.sigma_logL_bcg,
         )
         cluster_obs_b, _, _ = make_test_data(
             truth_b, cfg.radii, poisson_richness=True,
@@ -482,6 +578,13 @@ def build_truth_catalog(gamma_true, g_idx, cfg):
             sigma_lnlambda_intr=cfg.sigma_lnlambda_intr,
         )
         truth_b["Lambda"] = cluster_obs_b["Lambda"]
+        if cfg.delta_m_reference:
+            _ref = np.load(cfg.delta_m_reference)
+            _dm_true, _dm_obs = _map_delta_m_to_reference(
+                np.asarray(truth_b["delta_m"], float), _ref["dm"], _ref["err"],
+                np.random.default_rng(_seed(g_idx, 90_000 + batch)), cfg.delta_m_noise_scale)
+            truth_b["delta_m_true"] = _dm_true
+            truth_b["delta_m"] = _dm_obs
         keep = ((truth_b["Lambda"]  > cfg.lambda_min)
               & (truth_b["delta_m"] > 0.0)
               & np.isfinite(truth_b["delta_m"])
@@ -492,10 +595,10 @@ def build_truth_catalog(gamma_true, g_idx, cfg):
         n_sel += len(truth_b)
     truth = _vstack(selected)[:cfg.n_clusters]
 
-    dm_s    = np.asarray(truth["delta_m"])
-    logdm_s = np.log10(np.maximum(dm_s, 1e-6) / cfg.delta_m_ref)
+    dm_s    = np.asarray(truth["delta_m_true"] if "delta_m_true" in truth.colnames else truth["delta_m"])
+    logdm_s = dm_regressor(dm_s, cfg.delta_m_ref)   # Delta_m (1.1) or log10(Delta_m/ref) (1.0)
     truth["concentration"] = np.asarray(truth["concentration"]) * 10.0 ** (
-        gamma_true * logdm_s
+        gamma_true * (logdm_s - cfg.dm_center)
     )
 
     logM_s  = np.log10(truth["M_halo"])

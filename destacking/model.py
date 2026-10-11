@@ -3,6 +3,7 @@ import xlensing
 
 from destacking.relations import mass_lambda_McClintock18, c_DuttonMaccio
 from destacking.simulation import _pivot_from_delta_m
+from destacking.dmform import dm_regressor
 
 _MC_M_PIVOT_LOG = 14.0   # log10(M_sun) — fixed pivot mass for M-c parametrisation
 _MC_Z_REF       = 0.35   # fixed reference redshift for c0 normalisation
@@ -488,9 +489,7 @@ def forward_model_combined(
                                      Gz=beta_mr) + log_M_norm
     M200m = 10.0 ** logM
 
-    dm_eff   = np.where(np.isfinite(dm), dm, delta_m_ref)
-    dm_eff   = np.maximum(dm_eff, 1e-6)   # avoid log10(0)
-    log_dm_r = np.log10(dm_eff / delta_m_ref)
+    log_dm_r = dm_regressor(dm, delta_m_ref)   # Delta_m (1.1) or log10(Delta_m/ref) (1.0); see dmform
 
     logC = (np.log10(c0)
             + alpha_cm * (logM - M_pivot_log)
@@ -586,9 +585,7 @@ def forward_model_diemer(
                                      Gz=beta_mr) + log_M_norm
     M200m = 10.0 ** logM
 
-    dm_eff   = np.where(np.isfinite(dm), dm, delta_m_ref)
-    dm_eff   = np.maximum(dm_eff, 1e-6)   # avoid log10(0)
-    log_dm_r = np.log10(dm_eff / delta_m_ref)
+    log_dm_r = dm_regressor(dm, delta_m_ref)   # Delta_m (1.1) or log10(Delta_m/ref) (1.0); see dmform
 
     logC  = np.log10(diemer19_c200m(M200m, z)) + gamma * log_dm_r
     C200m = 10.0 ** logC

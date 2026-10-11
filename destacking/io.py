@@ -27,6 +27,8 @@ def save_simulation_checkpoint(sim_subdir, truth, ols, cluster_obs,
         M_halo=np.asarray(truth["M_halo"]),
         concentration=np.asarray(truth["concentration"]),
         delta_m=np.asarray(truth["delta_m"]),
+        # true (error-free) magnitude gap, present only with delta_m_reference
+        **({"delta_m_true": np.asarray(truth["delta_m_true"])} if "delta_m_true" in truth.colnames else {}),
     )
     co_arrays = {
         "z":       np.asarray(cluster_obs["z"]),
@@ -43,8 +45,9 @@ def save_simulation_checkpoint(sim_subdir, truth, ols, cluster_obs,
     if "stack_name" in getattr(cluster_obs, "colnames", cluster_obs):
         co_arrays["stack_name"] = np.asarray(cluster_obs["stack_name"])
     np.savez_compressed(os.path.join(sim_subdir, "cluster_obs.npz"), **co_arrays)
+    from destacking.dmform import DM_FORM
     with open(os.path.join(sim_subdir, "ols.json"), "w") as f:
-        json.dump(ols, f, indent=2)
+        json.dump(dict(ols, dm_form=DM_FORM), f, indent=2)
 
 
 def load_simulation_checkpoint(sim_subdir):

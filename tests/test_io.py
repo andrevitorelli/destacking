@@ -1,4 +1,5 @@
 import json
+from destacking.dmform import DM_FORM
 import pickle
 
 import numpy as np
@@ -65,7 +66,7 @@ def test_checkpoint_round_trip_basic(tmp_path):
     np.testing.assert_allclose(
         np.asarray(cluster_obs_r["Lambda"]), np.asarray(cluster_obs["Lambda"])
     )
-    assert ols_r == ols
+    assert ols_r == dict(ols, dm_form=DM_FORM)
 
 
 def test_checkpoint_writes_expected_files(tmp_path):
@@ -95,7 +96,8 @@ def test_checkpoint_ols_json_is_human_readable(tmp_path):
     )
     with open(tmp_path / "ols.json") as f:
         loaded = json.load(f)
-    assert loaded == ols
+    # the checkpoint also records the magnitude-gap form of the run (destacking.dmform)
+    assert loaded == dict(ols, dm_form=DM_FORM)
 
 
 def test_checkpoint_stack_name_included_when_present(tmp_path):

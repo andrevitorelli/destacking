@@ -69,6 +69,7 @@ from nautilus import Prior, Sampler  # noqa: E402
 from destacking.model import BIN_AVERAGE_NODES_DEFAULT, _nfw_components, bin_average_nodes  # noqa: E402
 from destacking.fitting import N_EFF_DEFAULT  # noqa: E402
 from destacking.relations import mass_lambda_McClintock18  # noqa: E402
+from destacking.dmform import DM_FORM, dm_regressor  # noqa: E402
 
 DELTA_M_REF = 0.1          # same as gamma_inference.py
 M_PIVOT_LOG = 14.0
@@ -121,7 +122,7 @@ class StackedForwardModel:
     """Precomputed members, weights and stacked data; callable log-likelihood."""
 
     def __init__(self, catalog, stacks, weights, min_n=50, two_halo=False, bin_nodes=BIN_AVERAGE_NODES_DEFAULT,
-                 n_boot_cov=None, r_min=0.0):
+                 n_boot_cov=None, r_min=0.0, likelihood="hartlap"):
         stacks = stacks["stacks"] if "stacks" in stacks and "z_bin" in stacks else stacks
         keep = np.isfinite(catalog["DELTA_M_I"]) & (catalog["DELTA_M_I"] > 0)
         cat = catalog[keep]
@@ -154,8 +155,14 @@ class StackedForwardModel:
             Cs = C[np.ix_(ok, ok)]
             Cs = Cs + 1e-6 * np.eye(ok.sum()) * np.mean(np.diag(Cs))
             # Hartlap et al. (2007) debiasing of the inverse of a covariance
-            # estimated from n_boot bootstrap resamples.
-            hart = (n_boot - ok.sum() - 2) / (n_boot - 1)
+            # estimated from N independent realisations.  For a cluster
+            # bootstrap N is the number of member clusters n, not the number
+            # of resamples (2026-10-08 fix; n_boot_cov=<int> reproduces the
+            # old N_boot-based factor).  likelihood='sh' instead uses the
+            # Sellentin & Heavens (2016) t-likelihood with N = n and the
+            # uncorrected inverse.
+            n_real = n if n_boot_cov is None else n_boot
+            hart = 1.0 if likelihood == "sh" else (n_real - ok.sum() - 2) / (n_real - 1)
             k = len(names)
             names.append(name); data.append(d[ok]); masks.append(ok)
             cinv.append(hart * np.linalg.inv(Cs)); used.append(n)
@@ -173,12 +180,13 @@ class StackedForwardModel:
         self.catalog_rows = np.flatnonzero(np.asarray(keep))[allm]
         self.z = np.asarray(sub["ZPHOT"], float)
         self.lam = np.asarray(sub["NGALS"], float)
-        self.log_dm = np.log10(np.asarray(sub["DELTA_M_I"], float) / DELTA_M_REF)
+        self.log_dm = dm_regressor(sub["DELTA_M_I"], DELTA_M_REF)   # Delta_m (1.1) or log10(Delta_m/ref) (1.0)
         self.K = np.asarray(weights["K"], float)[
             [id_to_row[int(i)] for i in np.asarray(sub["ID"])]]
         self.norm = self.S @ self.K                      # (n_stacks, n_bins)
         self.names, self.data, self.cinv, self.masks = names, data, cinv, masks
         self.n_stacked = np.array(used)
+        self.likelihood = likelihood
         self.two_halo = two_halo
         self.bin_nodes = bin_nodes
         if two_halo:
@@ -214,7 +222,12 @@ class StackedForwardModel:
             r = self.data[k] - mod[k][self.masks[k]]
             if not np.all(np.isfinite(r)):
                 return -np.inf
-            ll -= 0.5 * r @ self.cinv[k] @ r
+            chi2 = r @ self.cinv[k] @ r
+            if self.likelihood == "sh":
+                n = self.n_stacked[k]
+                ll -= 0.5 * n * np.log1p(chi2 / (n - 1))
+            else:
+                ll -= 0.5 * chi2
         # Extreme prior draws can overflow the quadratic form (inf - inf =
         # NaN); nautilus needs -inf there, as in destacking.fitting.
         return float(ll) if np.isfinite(ll) else -np.inf
@@ -229,6 +242,8 @@ def main():
     ap.add_argument("--data", required=True, choices=["real", "sim"],
                     help="real -> two-halo term on; sim -> off (see module docstring)")
     ap.add_argument("--min-n", type=int, default=50)
+    ap.add_argument("--likelihood", default="hartlap", choices=["hartlap", "sh"],
+                    help="hartlap: Gaussian, Hartlap factor with N = member clusters; sh: Sellentin & Heavens (2016) t-likelihood")
     ap.add_argument("--r-min", type=float, default=0.0,
                     help="drop stacked radial bins whose centre is below this radius [Mpc] (default 0: keep all); "
                          "0.25 matches the joint fits' inner radius")
@@ -248,7 +263,7 @@ def main():
 
     fm = StackedForwardModel(Table.read(a.catalog), pickle.load(open(a.stacks, "rb")),
                              np.load(a.weights), min_n=a.min_n, two_halo=(a.data == "real"),
-                             bin_nodes=a.bin_nodes, r_min=a.r_min)
+                             bin_nodes=a.bin_nodes, r_min=a.r_min, likelihood=a.likelihood)
     print(f"{len(fm.names)} stacks (N>={a.min_n}), {fm.S.shape[1]:,} member clusters, "
           f"data={a.data} two_halo={fm.two_halo} bin_nodes={a.bin_nodes} r_min={a.r_min} Mpc "
           f"({int(np.sum(fm.radii >= a.r_min))} of {len(fm.radii)} radial bins)", flush=True)
@@ -259,7 +274,7 @@ def main():
     w = np.exp(logw - logw.max()); w /= w.sum()
     np.savez(a.out, samples=pts, weights=w, log_l=logl, param_order=np.array(PARAMS),
              stack_names=np.array(fm.names), n_stacked=fm.n_stacked,
-             min_n=a.min_n, two_halo=fm.two_halo, data=a.data, r_min=a.r_min, bin_nodes=a.bin_nodes, log_z=sampler.log_z)
+             min_n=a.min_n, two_halo=fm.two_halo, data=a.data, r_min=a.r_min, bin_nodes=a.bin_nodes, log_z=sampler.log_z, dm_form=DM_FORM)
     print(f"done in {(time.time() - t0) / 60:.1f} min -> {a.out}")
     for j, name in enumerate(PARAMS):
         o = np.argsort(pts[:, j]); c = np.cumsum(w[o])

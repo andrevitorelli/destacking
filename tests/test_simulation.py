@@ -85,7 +85,9 @@ def test_powerlaw_lf_positive():
 # ---------------------------------------------------------------------------
 
 def test_pivot_at_ref_returns_c_pivot_0():
-    dm = np.array([1.0, 1.0, 1.0])
+    # zero regressor: delta_m = 0 in the linear form (paper 1.1), = delta_m_ref in the log form
+    from destacking.dmform import DM_FORM
+    dm = np.full(3, 0.0 if DM_FORM == "linear" else 1.0)
     result = _pivot_from_delta_m(dm, c_pivot_0=2.0, delta_m_ref=1.0, gamma=0.5)
     np.testing.assert_allclose(result, 2.0)
 
