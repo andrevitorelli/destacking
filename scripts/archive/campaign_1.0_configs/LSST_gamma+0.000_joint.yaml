@@ -1,0 +1,50 @@
+# HPC production config (cluster_runs.md spec), STAGE 2/3 "joint":
+# LSST-like conditions, true gamma = +0.000, joint (destacking)
+# per-cluster fit, inference-only against stage 1's ("simulate") already-
+# written checkpoint -- SLURM dependency ensures stage 1 completes first.
+# n_bootstrap=50, n_workers=32 threads, per cluster_runs.md.
+#
+# Usage: python scripts/gamma_inference.py scripts/configs/LSST_gamma+0.000_joint.yaml
+# (RUN_DIR -- this stage's OWN output location for bootstrap fit results
+# -- is set by the paired .slurm script's env var, same convention as the
+# local perf-test configs. data_folder below is a separate YAML key
+# pointing at stage 1's already-written checkpoint, read-only.)
+
+simulation:  false
+inference:   true
+data_folder: $DESTACKING_DATA/output/LSST_gamma+0.000_sim
+
+# REQUIRED in inference-only mode (not optional like in a combined run) --
+# must describe the radial grid data_folder's checkpoint was measured on.
+fit_log_inner_radius: -0.8
+fit_log_outer_radius:  0.6
+fit_n_radii:           8
+
+gamma_range: [0.0, 0.0]
+n_gamma:     1
+n_workers:   32
+
+bootstrap:   true
+n_bootstrap: 50
+# Wall-time budget per nautilus fit, capped to 24h / n_bootstrap = 1728s
+# (2026-09-05 policy, after DES_gamma-0.500's joint job spent 4+ hours
+# stuck retrying a single pathological bootstrap draw that kept crashing
+# deep inside nautilus's own bound-construction code with
+# numpy.linalg.LinAlgError: Singular matrix -- each failed attempt burned
+# ~1.1M likelihood evaluations before crashing, effectively consuming the
+# entire per-fit budget under the OLD, much larger fixed timeout without
+# producing a usable result). Capping every individual fit's budget to a
+# fair share of the job's 24h SLURM walltime means no single bad draw can
+# consume a disproportionate fraction of it; a fit that hits this wall
+# stops there (nautilus returns not-converged) and the retry loop moves on
+# to a fresh bootstrap draw. If EVERY bootstrap for a given gamma hits this
+# wall, that gamma's job will show it clearly (few/no converged fits,
+# most/all summaries at fit_wall_s ~ timeout_s) for follow-up investigation
+# after the campaign, rather than the job silently burning its whole
+# walltime on one draw.
+timeout: 1728
+
+r_min_fit: 0.5
+fit_fmiss:           0.36
+fit_sigma_off_mpc_h: 0.32
+

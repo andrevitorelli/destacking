@@ -1,0 +1,29 @@
+# Paper 1.1 simulation stage: draws one simulated cluster population and source catalogue, shears it
+# and measures every cluster's Delta Sigma.  Placeholders {GAMMA}, {CHAIN} and {SEED} are filled by make_configs.py.
+simulation: true
+inference: false
+gamma_range: [{GAMMA}, {GAMMA}]
+n_gamma: 1
+n_workers: 32
+sim_prefix: '{CHAIN}_g'
+n_clusters: 80000
+z_cluster_range: [0.1, 0.6]
+density: 30.0
+shape_noise: 0.27
+smail_alpha: 2.0
+smail_beta: 0.68
+smail_z0: 0.11
+triaxiality: true
+miscentering: true
+f_cen: 0.64
+sigma_off_mpc_h: 0.32
+sim_log_inner_radius: -0.8
+sim_log_outer_radius: 0.6
+sim_n_radii: 8
+n_cov_bootstrap: 200
+floor_rmax: 0.5
+triaxial_shear_model: exact
+seed_offset: {SEED}
+dm_model: zheng07
+sigma_logL_bcg: 0.12
+dm_center: 0.9

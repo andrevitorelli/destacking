@@ -1,56 +1,74 @@
-# Destacking
+# destacking
 
-This work consists of a joint fitting of the weak lensing signal of galaxy clusters to study observable relations. The initial idea is to investigate relationships between cluster observables such as the magnitude gap (that is, the difference in magnitude between the BCG and the brightest satellite in the r band inside a radius of half R_200), or the offset between the BCG and the weighted luminosity center, and the cluster concentration. The idea is to calibrate the hight of the pivot of the mass-concentration relation as a function of the observable, using a small hierarchical bayesian model.
+Joint (un-stacked) fitting of individual galaxy-cluster weak-lensing profiles
+to constrain cluster scaling relations.
 
+Instead of stacking clusters and fitting a mean profile, `destacking` fits
+every cluster's ΔΣ profile at once under one shared likelihood:
+* the mass of each cluster is tied to its richness and redshift (the
+  mass-richness relation);
+* its concentration is tied to its mass, redshift and magnitude gap (the
+  mass-concentration relation).
+
+The package also implements a forward-modelled stacked fit that uses exactly
+the same model, and the simulations used to compare the two.
+
+This is a research repository under active development. The lensing
+measurement and the ΔΣ model live in the
+[xlensing](https://github.com/andrevitorelli/xlensing) package.
+
+## Reproducing the paper
+
+**[`paper_1_1/README.md`](paper_1_1/README.md)** is a step-by-step guide to
+reproducing *Joint fit of galaxy cluster scaling relations from individual
+weak lensing data: comparison with stacked analysis and a real data test*
+(Vitorelli & Cypriano). It covers:
+* the public input catalogues;
+* the real-data measurements and fits;
+* the 132-chain simulation campaign;
+* every table and figure.
+
+All configurations and scripts are in `paper_1_1/`.
+
+## Installation
+
+```bash
+micromamba create -n destacking -f scripts/environment.yml    # or conda / mamba
+micromamba activate destacking
+pip install git+https://github.com/tmcclintock/cluster_toolkit
+pip install git+https://github.com/andrevitorelli/xlensing
+pip install -e .
+```
+
+Data and outputs are read from and written to `$DESTACKING_DATA`, which
+defaults to `~/destacking_data`. Config files may use `~` and
+`$DESTACKING_DATA` in their paths.
+
+## Quick start
+
+No external data are needed. This simulates its own clusters end to end:
+
+```bash
+python scripts/gamma_inference.py scripts/gamma_inference_config_example.yaml
+```
 
 ## Documentation
 
-Full manual (installation, core concepts, config reference, walkthroughs,
-known caveats): [`docs/MANUAL.md`](docs/MANUAL.md).
+[`docs/MANUAL.md`](docs/MANUAL.md) covers installation, core concepts, the
+config reference, walkthroughs for simulated and real data, the output
+formats and known caveats.
 
-## Quickstart
+## Layout
 
-No external data needed — this simulates its own clusters end to end:
-```
-pip install -e .
-pip install git+https://github.com/andrevitorelli/xlensing
-python scripts/gamma_inference.py scripts/gamma_inference_config_example.yaml
-```
-This is the recommended first thing to run, including for readers without
-access to the real WaZP/DES-Y3 catalogs used in the paper. See
-`docs/MANUAL.md` §4 for this walkthrough plus the real-data and
-stacked-cross-check pipelines.
+| Path | Contents |
+|---|---|
+| `destacking/` | the package: model, fitting, simulation, data selection, I/O |
+| `scripts/gamma_inference.py` | the main simulation + joint-fit driver (YAML configured) |
+| `scripts/auxiliary_scripts/` | real-data preparation, stacked analysis, forward-modelled stacked fit |
+| `paper_1_1/` | everything needed to reproduce the paper |
+| `notebooks/` | exploratory notebooks |
+| `scripts/archive/` | superseded scripts and configurations, kept for the record |
 
-## Dependencies
-- Numpy, scipy, astropy, nautilus-sampler, colossus, cluster_toolkit,
-  corner, h5py, multiprocess, scikit-learn, tqdm, pyyaml, matplotlib
-  (see `pyproject.toml`)
-- xlensing (https://www.github.com/andrevitorelli/xlensing) — not on PyPI,
-  install separately
+## License
 
-
-## Method example
-
-1. Sample a mass from a mass-observable relation for each cluster in the data, given that observable. 
-2. Using a concentration-observable relation, define the pivot height for the mass-concentration relation as a part of the parameter sample process.
-3. Generate NFW profiles for each of the clusters in the sample.
-4. Calculate the loglikelihood respective to the data
-
-In this example, only one parameter is fitted (the scaling between the height of the pivot of the mass-concentration relation and the observable.)
-
-
-## Development tasks
-
-- Initial Simulation
-    - Generate a sample of cluster masses from a mass function
-    - Generate a cluster richness from an HOD
-    - Generate cluster magnitude gaps by sampling galaxy luminosities from the luminosity function
-    - Generate their concentrations, using a mass-concentration relation, but changing the pivot point with some power-law function of the magnitude gap
-    - Generate NFW profiles of the excess mass density (Delta Sigma) directly, no shear catalog at this point
-- First application: use the method above to recover the parameter that controls the height of the pivot point respective to the magnitude gap
-- Further reiterations
-    - Generate background galaxy fields and distort them with the clusters and repeat the analysis
-    - Generate triaxial clusters and repeat the analysis
-- Future work:
-    - investigate the collider effect when getting mass-concentration relations from data, when stacking clusters per richness (as richness will be a collider between environmental effects and mass)
-    - add cosmological sampling to investigate the role of neutrinos
+MIT (see `LICENSE`).

@@ -99,7 +99,8 @@ Configuration via environment variables
                 budget cuts the sampler off mid-run and produces collapsed
                 (near-zero-width) posteriors.
   RUN_DIR       Output directory                (default
-                ~/destacking_data/output/run_YYYY-MM-DDTHH-MM-SS)
+                $DESTACKING_DATA/output/run_YYYY-MM-DDTHH-MM-SS;
+                DESTACKING_DATA defaults to ~/destacking_data)
                 Set to an existing path to resume a previous run.
 """
 
@@ -108,6 +109,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+from destacking.paths import DATA_ROOT, expand_path
 import shutil
 import sys
 import time
@@ -195,9 +197,9 @@ def _cfg(key, env_name, default, cast=None):
     """YAML > env var > default.  Cast applied for env-var path only; YAML
     values are taken as-is (PyYAML already gives ints/floats/bools/lists)."""
     if key in _CFG:
-        return _CFG[key]
+        return expand_path(_CFG[key])
     if env_name and env_name in os.environ:
-        v = os.environ[env_name]
+        v = expand_path(os.environ[env_name])
         return cast(v) if cast else v
     return default
 
@@ -670,7 +672,7 @@ _DEFAULT_RUN_TS = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 # real-data-relocated.
 RUN_DIR = os.environ.get(
     "RUN_DIR",
-    os.path.join(os.path.expanduser("~/destacking_data/output"),
+    os.path.join(DATA_ROOT, "output",
                 f"run_{_DEFAULT_RUN_TS}"),
 )
 # RUN_DIR is only a path here; it is created (and the config copied into
@@ -731,7 +733,7 @@ def simulate_lensing(truth, shapes, mis, g_idx):
 # memory sim-data-relocated) -- real WaZP/DES-Y3 data stays under
 # notebooks/data/, but this writes SIMULATED per-gamma data in the same
 # notebook-compatible layout, so it goes to the sims directory instead.
-_NOTEBOOK_DATA_DIR = os.path.expanduser("~/destacking_data/sims")
+_NOTEBOOK_DATA_DIR = os.path.join(DATA_ROOT, "sims")
 
 
 def _write_notebook_compat_sim(g_idx, gamma_true, truth, cluster_obs, bgs):

@@ -6,7 +6,7 @@
 
 simulation: false
 inference:  true
-data_folder: /home/andre/destacking_data/real_data/wazp_real_data_floor6
+data_folder: $DESTACKING_DATA/real_data/wazp_real_data_floor6
 
 gamma_range: [0.0, 0.0]
 n_gamma:     1

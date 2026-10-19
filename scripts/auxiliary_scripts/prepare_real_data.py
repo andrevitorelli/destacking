@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import json
 import os
+from destacking.paths import DATA_ROOT, expand_path
 import pickle
 import sys
 import time
@@ -83,7 +84,7 @@ def _cfg(cfg, key, default, cast=None, required=False):
         if required:
             raise SystemExit(f"config key '{key}' is required")
         return default
-    v = cfg[key]
+    v = expand_path(cfg[key])
     return cast(v) if cast is not None else v
 
 
@@ -266,7 +267,7 @@ def build_source_prefilter(cfg):
     import h5py
 
     cache      = _cfg(cfg, "filtered_cache",
-                      os.path.expanduser("~/destacking_data/real_data/metacal_filtered.npz"))
+                      os.path.join(DATA_ROOT, "real_data", "metacal_filtered.npz"))
     use_cache  = _cfg(cfg, "use_cache", True)
     metacal_f  = _cfg(cfg, "metacal_file", None, required=True)
     dnf_f      = _cfg(cfg, "dnf_file", None, required=True)

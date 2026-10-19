@@ -34,7 +34,7 @@ def _make_sim_config(n_clusters=3, n_workers=1, miscentering=True,
         delta_m_ref=0.1,
         density=7.5,
         shape_noise=0.27,
-        width_rad=0.006,
+        width_rad=4.5,          # physical aperture radius [Mpc] (was an angle in early versions)
         z_src_range=(0.0, 2.5),
         z_src_alpha=2.0,
         z_src_beta=1.5,
@@ -433,7 +433,7 @@ def test_simulation_config_n_workers_default():
     cfg = SimulationConfig(
         n_clusters=1, z_cluster_range=(0.1, 0.6), logm_range=(13.5, 15.0),
         lambda_min=20.0, delta_m_ref=0.1, density=7.5, shape_noise=0.27,
-        width_rad=0.006, z_src_range=(0.0, 2.5), z_src_alpha=2.0,
+        width_rad=4.5, z_src_range=(0.0, 2.5), z_src_alpha=2.0,
         z_src_beta=1.5, z_src_z0=0.4, spherical=False, miscentering=True,
         f_cen=0.64, sigma_off_mpc=0.32, radii=RADII,
         bin_limits=_bin_limits(RADII), n_cov_bootstrap=20,

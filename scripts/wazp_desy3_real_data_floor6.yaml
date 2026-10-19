@@ -18,7 +18,7 @@
 # Usage: python scripts/auxiliary_scripts/prepare_real_data.py wazp_desy3_real_data_floor6.yaml
 
 # ═══ Cluster catalogue ═══════════════════════════════════════════════════
-cluster_catalog_file: /home/andre/destacking_data/real_data/wazp_real_data.fits
+cluster_catalog_file: $DESTACKING_DATA/real_data/wazp_real_data.fits
 clusters_file: /mnt/c/Users/andre/DATA/y6a2_dnf_wazp_v5.0.12.6801_clusters.fits
 members_file:  /mnt/c/Users/andre/DATA/y6a2_dnf_wazp_v5.0.12.6801_members.fits
 
@@ -33,7 +33,7 @@ delta_m_min: 0.0
 metacal_file: /mnt/c/Users/andre/DATA/DESY3_metacal_v03-004.h5
 dnf_file:     /mnt/c/Users/andre/DATA/DESY3_GOLD_2_2.1_DNF.h5
 
-filtered_cache: /home/andre/destacking_data/real_data/metacal_filtered.npz
+filtered_cache: $DESTACKING_DATA/real_data/metacal_filtered.npz
 chunk_read: 10000000
 
 # ═══ Measurement ═══════════════════════════════════════════════════════════
@@ -62,6 +62,6 @@ checkpoint_every: 1000
 use_cache: true
 
 # ═══ Output ══════════════════════════════════════════════════════════════
-out_dir: /home/andre/destacking_data/real_data/wazp_real_data_floor6
+out_dir: $DESTACKING_DATA/real_data/wazp_real_data_floor6
 g_idx: 0
 gamma_true: 0.0

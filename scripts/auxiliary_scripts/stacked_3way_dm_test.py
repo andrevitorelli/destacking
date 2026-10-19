@@ -26,6 +26,7 @@ output_dir, n_workers)
 from __future__ import annotations
 
 import os
+from destacking.paths import DATA_ROOT
 import sys
 import time
 import pickle
@@ -191,9 +192,9 @@ def main():
         cfg = yaml.safe_load(f)
 
     sim_prefix = _cfg(cfg, "sim_prefix")
-    sims_dir = os.path.expanduser(_cfg(cfg, "sims_dir", "~/destacking_data/sims"))
+    sims_dir = os.path.expanduser(_cfg(cfg, "sims_dir", os.path.join(DATA_ROOT, "sims")))
     output_dir = os.path.expanduser(_cfg(
-        cfg, "output_dir", f"~/destacking_data/output/stacked3/{sim_prefix}",
+        cfg, "output_dir", os.path.join(DATA_ROOT, "output", "stacked3", sim_prefix),
     ))
     os.makedirs(output_dir, exist_ok=True)
     wsa.NWORKERS  = _cfg(cfg, "n_workers", 32, cast=int)

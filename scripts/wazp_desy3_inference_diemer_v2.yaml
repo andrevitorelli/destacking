@@ -34,9 +34,9 @@
 # ═══ Run phases ═══════════════════════════════════════════════════════════
 simulation: false
 inference:  true
-data_folder: /home/andre/destacking_data/real_data/wazp_real_data_floor6_v2
+data_folder: $DESTACKING_DATA/real_data/wazp_real_data_floor6_v2
 
-boosts: /home/andre/destacking_data/real_data/wazp_boost_fits.pkl
+boosts: $DESTACKING_DATA/real_data/wazp_boost_fits.pkl
 
 # ═══ Scan (shared) ════════════════════════════════════════════════════════
 gamma_range: [0.0, 0.0]

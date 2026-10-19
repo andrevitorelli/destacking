@@ -129,6 +129,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+from destacking.paths import DATA_ROOT, expand_path
 import shutil
 import sys
 import time
@@ -215,9 +216,9 @@ def _cfg(key, env_name, default, cast=None):
     """YAML > env var > default.  Cast applied for env-var path only; YAML
     values are taken as-is (PyYAML already gives ints/floats/bools/lists)."""
     if key in _CFG:
-        return _CFG[key]
+        return expand_path(_CFG[key])
     if env_name and env_name in os.environ:
-        v = os.environ[env_name]
+        v = expand_path(os.environ[env_name])
         return cast(v) if cast else v
     return default
 
@@ -566,7 +567,7 @@ TIMEOUT = int(_cfg("timeout", "TIMEOUT", 600, cast=int))
 _DEFAULT_RUN_TS = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 RUN_DIR = os.environ.get(
     "RUN_DIR",
-    os.path.join(os.path.expanduser("~/destacking_data/output"), f"run_{_DEFAULT_RUN_TS}"),
+    os.path.join(DATA_ROOT, "output", f"run_{_DEFAULT_RUN_TS}"),
 )
 # RUN_DIR is only a path here; it is created (and the config copied into
 # it) inside main(), so importing this module for analysis leaves no
@@ -616,7 +617,7 @@ def simulate_lensing(truth, shapes, mis, g_idx):
 
 # ── Notebook-compatible per-gamma sim data ────────────────────────────────────
 
-_NOTEBOOK_DATA_DIR = os.path.expanduser("~/destacking_data/sims")
+_NOTEBOOK_DATA_DIR = os.path.join(DATA_ROOT, "sims")
 
 
 def _write_notebook_compat_sim(g_idx, gamma_true, truth, cluster_obs, bgs):

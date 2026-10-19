@@ -29,7 +29,7 @@
 # checkpoints and only redo inference.
 simulation: false
 inference:  true
-data_folder: '/home/andre/github/destacking/scripts/gamma_scan_outputs/run_2026-07-21T23-23-37'
+data_folder: 'scripts/gamma_scan_outputs/run_2026-07-21T23-23-37'
 
 # Inference-only mode requires the fit radial grid explicitly (must match
 # the grid the referenced data was simulated on: sim_log_inner_radius=-0.8,

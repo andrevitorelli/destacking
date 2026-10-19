@@ -63,6 +63,7 @@ saved pickles alone, with no recomputation.
 """
 
 import os
+from destacking.paths import DATA_ROOT
 import pickle
 import time
 
@@ -84,7 +85,7 @@ from scipy.optimize import curve_fit
 # Real WaZP+DES-Y3 data and outputs (including the boost fits below) live
 # outside the repo -- moved 2026-07-27, see project memory
 # sim-data-relocated / real-data-relocated.
-REAL_DATA_DIR = os.path.expanduser("~/destacking_data/real_data")
+REAL_DATA_DIR = os.path.join(DATA_ROOT, "real_data")
 
 WAZP_CATALOG = f"{REAL_DATA_DIR}/wazp_real_data.fits"
 FILTERED_NPZ = f"{REAL_DATA_DIR}/metacal_filtered.npz"
@@ -96,7 +97,11 @@ FILTERED_NPZ = f"{REAL_DATA_DIR}/metacal_filtered.npz"
 # baseline: the boost fit needs to match wazp_real_data (factor=1.1), which
 # is what the current joint fit (wazp_desy3_inference_boost_floor6.yaml,
 # the reference converged real-data config) reads.
-RUN_TAG = ""
+# The selection factor f of z_s > f z_l + 0.2 can be set with the environment
+# variable WAZP_STACK_FACTOR (default 1.1).  A factor other than 1.1 tags the
+# output files with "_f<factor>" (e.g. _f1.2), so runs do not overwrite each other.
+_STACK_FACTOR = float(os.environ.get("WAZP_STACK_FACTOR", "1.1"))
+RUN_TAG = "" if _STACK_FACTOR == 1.1 else f"_f{_STACK_FACTOR:g}"
 
 BKG_CACHE  = f"{REAL_DATA_DIR}/wazp_stacked_bkgs{RUN_TAG}.pkl"
 STACKS_PKL = f"{REAL_DATA_DIR}/wazp_stacked_stacks{RUN_TAG}.pkl"
@@ -118,7 +123,7 @@ NWORKERS   = 12
 # the old hardcoded xlensing default exactly — back to baseline (see
 # RUN_TAG above); the factor=1.2 experiment is on hold.
 BACKGROUND_STRATEGY = "margin"
-BACKGROUND_STRATEGY_KWARGS = {"factor": 1.1, "offset": 0.2}
+BACKGROUND_STRATEGY_KWARGS = {"factor": _STACK_FACTOR, "offset": 0.2}
 TIMEOUT_S  = 300.0     # per-stack nautilus wall-clock cap
 MIN_N_FOR_FIT = 10     # stacks below this are excluded from ml_fits/cmr_fits
 N_DRAWS    = 1000      # bootstrap iterations for the M-lambda / c-M fits

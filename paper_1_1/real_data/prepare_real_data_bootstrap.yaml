@@ -1,0 +1,54 @@
+# Paper 1.1, real data: per-cluster Delta Sigma of the WaZP clusters with the DES Y3 metacalibration
+# shears, with the galaxy-bootstrap covariance and a shape-noise variance floor inside 0.5 Mpc
+# (the measurement used by the joint fit), 6 radial bins 0.25-3.98 Mpc, background z_s > 1.1 z_l + 0.2.
+# usage: python scripts/auxiliary_scripts/prepare_real_data.py paper_1_1/real_data/prepare_real_data_bootstrap.yaml
+
+cluster_catalog_file: $DESTACKING_DATA/real_data/wazp_real_data.fits
+clusters_file: $DESTACKING_DATA/raw/y6a2_dnf_wazp_v5.0.12.6801_clusters.fits
+members_file:  $DESTACKING_DATA/raw/y6a2_dnf_wazp_v5.0.12.6801_members.fits
+
+richness_min: 25
+z_max:        0.7
+require_bcg:  true
+mag_gap_r_cut_mpc: 0.5
+
+delta_m_min: 0.0
+
+# ═══ Source catalogue (DES-Y3 metacalibration) ════════════════════════════
+metacal_file: $DESTACKING_DATA/raw/DESY3_metacal_v03-004.h5
+dnf_file:     $DESTACKING_DATA/raw/DESY3_GOLD_2_2.1_DNF.h5
+
+filtered_cache: $DESTACKING_DATA/real_data/metacal_filtered.npz
+chunk_read: 10000000
+
+# ═══ Measurement ═══════════════════════════════════════════════════════════
+radius_mpc: 5.3   # the 6-bin grid ends at 5.25 Mpc; 5.0 truncated the last bin
+
+background_strategy: margin
+background_strategy_kwargs:
+  factor: 1.1
+  offset: 0.2
+
+log_inner_radius: -0.6
+log_outer_radius:  0.6
+n_radii:           6
+
+covariance: bootstrap   # galaxy-bootstrap data vector + covariance ...
+floor_formula: analytic   # ... with the CORRECT shape-noise floor (sigma_e population) below floor_rmax
+floor_rmax: 0.5
+n_cov_bootstrap: 200
+min_sources: 20
+
+# Shot-noise variance floor -- see wazp_desy3_real_data_floor.yaml. Same
+# sigma_e/floor_rmax; floor_rmax=0.5 still matches the historical r_min_fit
+# default even though the bin edges themselves have shifted.
+sigma_e: population   # weighted rms ellipticity of the selected source catalogue
+
+n_workers: 12
+checkpoint_every: 1000
+use_cache: true
+
+# ═══ Output ══════════════════════════════════════════════════════════════
+out_dir: $DESTACKING_DATA/real_data/wazp_real_data_bootfloor_v4
+g_idx: 0
+gamma_true: 0.0

@@ -10,7 +10,7 @@
 # ═══ Cluster catalogue ═══════════════════════════════════════════════════
 # Point at a pre-built compact catalogue (columns ID, RA, DEC, NGALS, ZPHOT,
 # DELTA_M_I[, DELTA_M_I_ERR]) ...
-cluster_catalog_file: /home/andre/destacking_data/real_data/wazp_real_data.fits
+cluster_catalog_file: $DESTACKING_DATA/real_data/wazp_real_data.fits
 
 # ... or build it from the raw WaZP cluster + member catalogues (set both
 # to build/rebuild; leave null to require cluster_catalog_file to exist
@@ -39,7 +39,7 @@ metacal_file: null
 # (row-aligned with metacal_file — checked at load time)
 dnf_file: null
 
-filtered_cache: /home/andre/destacking_data/real_data/metacal_filtered.npz
+filtered_cache: $DESTACKING_DATA/real_data/metacal_filtered.npz
 chunk_read: 10000000   # metacal rows streamed per chunk during pre-filter
 
 # ═══ Measurement ═══════════════════════════════════════════════════════════
@@ -79,7 +79,7 @@ use_cache: true            # reuse the source pre-filter cache and any
                            # force a clean rebuild of both
 
 # ═══ Output ══════════════════════════════════════════════════════════════
-out_dir: /home/andre/destacking_data/real_data/wazp_real_data   # a gamma_inference data_folder
+out_dir: $DESTACKING_DATA/real_data/wazp_real_data   # a gamma_inference data_folder
 g_idx: 0
 gamma_true: 0.0    # NOT a truth value — real clusters have no known gamma.
                    # Pure directory-naming/metadata label; see the module

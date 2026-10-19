@@ -1,0 +1,52 @@
+# Joint-vs-stacked constraining-power comparison (2026-09-09): fits the
+# FULL scaling relations (mass-richness Eq. + mass-concentration-with-gamma
+# Eq., all 9 parameters free) exactly as wazp_desy3_inference_boost_floor6.yaml
+# does on real data -- unlike every other joint config in this campaign,
+# which fixed miscentering and used the script's narrower default priors
+# for a pure gamma-recovery test. Reuses the EXISTING DESrb_gamma+0.167_sim
+# checkpoint (real-data radial-bin structure + shot-noise floor, see
+# destacking/simulation.py commit bd01faa and the 2026-09-06 investigation)
+# -- no re-simulation needed, this is a new fit-config-only run against
+# already-simulated data.
+#
+# No `boosts:` key, unlike the real-data config: a simulation has perfect
+# knowledge of which galaxies are background sources, so there is nothing
+# for a boost correction to fix (see destacking/simulation.py's
+# _process_cluster docstring).
+#
+# Usage: python scripts/gamma_inference.py scripts/configs/DESrb_gamma+0.167_jointfull.yaml
+
+simulation:  false
+inference:   true
+data_folder: $DESTACKING_DATA/output/DESrb_gamma+0.167_sim
+
+# Must match the simulate stage's grid (DESrb_gamma+0.167_simulate.yaml).
+fit_log_inner_radius: -0.6
+fit_log_outer_radius:  0.6
+fit_n_radii:           6
+
+gamma_range: [0.167, 0.167]
+n_gamma:     1
+n_workers:   32
+
+bootstrap:   true
+n_bootstrap: 50
+timeout:     1728
+
+r_min_fit: 0.0   # every bin reaches the fit, matching the real-data config
+
+# Full scaling relations, identical to wazp_desy3_inference_boost_floor6.yaml
+# (real WaZP+DES-Y3 production config) -- mass-richness (alpha_mr, beta_mr,
+# log_M_norm) AND mass-concentration-with-gamma (c0, alpha_cm, beta_cm,
+# gamma_cm) all free, plus miscentering (f_mis, sigma_off) sampled rather
+# than fixed to the simulation truth as elsewhere in this campaign.
+fit_params:
+  c0:           {fit: true, prior: gaussian, loc: 4.5,   scale: 3.0}
+  alpha_cm:     {fit: true, prior: gaussian, loc: -0.088, scale: 0.3}
+  beta_cm:      {fit: true, prior: gaussian, loc: -0.4,  scale: 1.5}
+  gamma_cm:     {fit: true, prior: gaussian, loc: 0.0,   scale: 10.5}
+  log_M_norm:   {fit: true, prior: gaussian, loc: 0.0,   scale: 0.3}
+  alpha_mr:     {fit: true, prior: gaussian, loc: 1.356, scale: 0.5}
+  beta_mr:      {fit: true, prior: gaussian, loc: -0.30, scale: 0.3}
+  f_mis:        {fit: true, prior: flat, lo: 0.0, hi: 1.0}
+  sigma_off:    {fit: true, prior: flat, lo: 0.0, hi: 1.0}

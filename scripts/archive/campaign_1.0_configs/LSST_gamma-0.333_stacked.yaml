@@ -1,0 +1,16 @@
+# HPC production config (cluster_runs.md spec), STAGE 3/3 "stacked":
+# LSST-like conditions, true gamma = -0.333, stacked-fit
+# comparison run "as done in the notebook" (wazp_mass_richness_by_delta_m.ipynb
+# SIMS=True path / its real-data analog wazp_stacked_analysis.py), on the
+# SAME simulated data stage 1 ("simulate") wrote -- SLURM dependency
+# ensures stage 1 completes first. Reads the notebook-compat files
+# directly (no resimulation), guaranteeing identical data to stage 2's
+# joint fit.
+#
+# Usage: python scripts/auxiliary_scripts/stacked_sim_analysis.py scripts/configs/LSST_gamma-0.333_stacked.yaml
+
+sim_prefix: "LSST_gamma-0.333_g"
+sims_dir:   "~/destacking_data/sims"
+output_dir: "$DESTACKING_DATA/output/LSST_gamma-0.333_stacked"
+n_workers:  32
+use_cache:  false

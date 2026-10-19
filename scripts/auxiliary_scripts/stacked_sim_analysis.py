@@ -32,6 +32,7 @@ output_dir, n_workers).
 from __future__ import annotations
 
 import os
+from destacking.paths import DATA_ROOT
 import sys
 import time
 import pickle
@@ -97,10 +98,10 @@ def main():
     if not sim_prefix:
         raise SystemExit("config must set 'sim_prefix' (matching the "
                           "gamma_inference.py config that produced the data)")
-    sims_dir   = os.path.expanduser(_cfg(cfg, "sims_dir", "~/destacking_data/sims"))
+    sims_dir   = os.path.expanduser(_cfg(cfg, "sims_dir", os.path.join(DATA_ROOT, "sims")))
     output_dir = os.path.expanduser(_cfg(
         cfg, "output_dir",
-        f"~/destacking_data/output/stacked/{sim_prefix}",
+        os.path.join(DATA_ROOT, "output", "stacked", sim_prefix),
     ))
     os.makedirs(output_dir, exist_ok=True)
 

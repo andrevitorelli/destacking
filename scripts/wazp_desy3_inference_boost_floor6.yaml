@@ -1,6 +1,6 @@
 # Real-data inference: WaZP clusters + DES-Y3 metacal, prepared by
 # prepare_real_data.py (wazp_desy3_real_data_floor6.yaml) into
-# /home/andre/destacking_data/real_data/wazp_real_data_floor6/simulation_g00_gamma+0.0/.
+# $DESTACKING_DATA/real_data/wazp_real_data_floor6/simulation_g00_gamma+0.0/.
 #
 # Variant of wazp_desy3_inference_boost_floor.yaml with 6 radial bins
 # instead of 8 (same log_inner/outer range, see
@@ -20,13 +20,13 @@
 # ═══ Run phases ═══════════════════════════════════════════════════════════
 simulation: false
 inference:  true
-data_folder: /home/andre/destacking_data/real_data/wazp_real_data_floor6
+data_folder: $DESTACKING_DATA/real_data/wazp_real_data_floor6
 
 # Per-cluster boost correction — boost_powerlaw_at_R evaluates the fitted
 # analytic B0/Rs/alpha model at whatever radii are passed in, so the
 # existing 24 stack fits (from the 8-bin stacked profiles) are still valid
 # to evaluate at this run's 6-bin RADII_fit — no need to rerun Stage 2b.
-boosts: /home/andre/destacking_data/real_data/wazp_boost_fits.pkl
+boosts: $DESTACKING_DATA/real_data/wazp_boost_fits.pkl
 
 # ═══ Scan (shared) ════════════════════════════════════════════════════════
 gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0

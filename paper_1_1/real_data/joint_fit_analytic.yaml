@@ -1,0 +1,37 @@
+# Paper 1.1, real data: joint fit with the analytic covariance (Appendix E and G), 50 cluster bootstraps.
+# Priors as the bootstrap-covariance joint fit, except Gaussian miscentring priors centred on the stacked fit.
+# usage: RUN_DIR=$DESTACKING_DATA/output/v1.1/real_runs/joint_v11e python scripts/gamma_inference.py paper_1_1/real_data/joint_fit_analytic.yaml
+
+two_halo: true
+
+simulation: false
+inference:  true
+data_folder: $DESTACKING_DATA/real_data/wazp_real_data_wclass_v5_dmpos
+
+boosts: $DESTACKING_DATA/real_data/wazp_boost_fits.pkl
+
+gamma_range: [0.0, 0.0]   # single label point — matches simulation_g00_gamma+0.0
+n_gamma:     1
+n_workers:   16
+
+n_clusters: 15825   # used only in titles; the fit uses every cluster in data_folder
+
+bootstrap:   true
+n_bootstrap: 50
+timeout:     7200
+
+fit_log_inner_radius: -0.6
+fit_log_outer_radius:  0.6
+fit_n_radii:           6
+r_min_fit:             0.0   # every bin reaches the fit
+
+fit_params:
+  c0:            {fit: true, prior: gaussian, loc: 4.5, scale: 5.0, lo: 0.0}   # centred on Dutton & Maccio (4.57 at the pivot)
+  alpha_cm:      {fit: true, prior: gaussian, loc: -0.1,  scale: 0.5}
+  beta_cm:       {fit: true, prior: gaussian, loc: -0.4,  scale: 2.0}
+  gamma_cm:      {fit: true, prior: gaussian, loc: 0.0,   scale: 1.0}
+  log_M_norm:    {fit: true, prior: gaussian, loc: 0.0,   scale: 0.5}
+  alpha_mr:      {fit: true, prior: gaussian, loc: 1.356, scale: 0.5}
+  beta_mr:       {fit: true, prior: gaussian, loc: -0.30, scale: 2.0}
+  f_mis:         {fit: true, prior: gaussian, loc: 0.294, scale: 0.178}   # stacked v3 posterior, width x2
+  sigma_off:     {fit: true, prior: gaussian, loc: 0.422, scale: 0.128}   # stacked v3 posterior, width x2 (Mpc)

@@ -12,3 +12,5 @@ scripts/gamma_scan_outputs/
 !docs/*.tex
 !claude/*.tar.gz
 !LICENSE
+!paper_1_1/campaign/*.sh
+!paper_1_1/campaign/*.csv

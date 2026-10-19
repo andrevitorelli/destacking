@@ -1,0 +1,25 @@
+# Paper 1.1 joint-fit stage: one nine-parameter joint fit of the realisation measured by the simulate stage
+# (analytic shape-noise covariance, re-measured by remeasure_checkpoint.py).  {GAMMA}, {DATA_FOLDER} filled by make_configs.py.
+simulation: false
+inference: true
+data_folder: '{DATA_FOLDER}'
+fit_log_inner_radius: -0.8
+fit_log_outer_radius: 0.6
+fit_n_radii: 8
+gamma_range: [{GAMMA}, {GAMMA}]
+n_gamma: 1
+n_workers: 32
+bootstrap: false
+n_bootstrap: 50
+timeout: 7200
+r_min_fit: 0.0
+fit_params:
+  c0: {fit: true, prior: flat, lo: 1.0, hi: 15.0}
+  alpha_cm: {fit: true, prior: gaussian, loc: -0.1, scale: 0.5}
+  beta_cm: {fit: true, prior: gaussian, loc: -0.4, scale: 2.0}
+  gamma_cm: {fit: true, prior: gaussian, loc: 0.0, scale: 1.0}
+  log_M_norm: {fit: true, prior: gaussian, loc: 0.0, scale: 0.5}
+  alpha_mr: {fit: true, prior: gaussian, loc: 1.356, scale: 0.5}
+  beta_mr: {fit: true, prior: gaussian, loc: -0.3, scale: 2.0}
+  f_mis: {fit: true, prior: flat, lo: 0.0, hi: 1.0}
+  sigma_off: {fit: true, prior: flat, lo: 0.0, hi: 1.0}

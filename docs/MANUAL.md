@@ -1,5 +1,10 @@
 # destacking — User Manual
 
+> **Reproducing paper 1.1:** see [`paper_1_1/README.md`](../paper_1_1/README.md).
+>
+> **Data location:** every script reads and writes under `$DESTACKING_DATA` (default `~/destacking_data`);
+> config paths may use `~` and `$DESTACKING_DATA`.
+
 This manual is assembled from the docstrings and inline commentary already
 in the codebase (`destacking/*.py`, `scripts/*.py`, YAML config templates).
 It does not introduce new behavior claims — every statement here traces to

@@ -1,32 +1,14 @@
-# Conda environment for running destacking (+xlensing) on the Hypatia HPC
-# cluster, per cluster_runs.md.
+# Conda environment for running destacking and xlensing (locally or on an HPC cluster).
 #
-# Usage (on the cluster, recommended via micromamba -- see note below):
+# Usage (micromamba is the fastest way to solve it; conda/mamba also work):
 #   micromamba create -n destacking -f scripts/environment.yml
 #   micromamba activate destacking
 #   pip install git+https://github.com/tmcclintock/cluster_toolkit
-#   pip install -e /scratch/andrezvitorelli/github/xlensing
-#   pip install -e /scratch/andrezvitorelli/github/destacking
+#   pip install git+https://github.com/andrevitorelli/xlensing     # or `pip install -e path/to/xlensing`
+#   pip install -e .                                                # this repository
 #
-# Found 2026-09-05: plain `conda install -n base -c conda-forge mamba` (to
-# bootstrap mamba itself) hung for over an hour on Hypatia's login node,
-# still stuck on "Solving environment" -- that bootstrap is itself a plain
-# conda solve, and Hypatia's base env already has ~520 packages installed
-# with channel_priority=flexible against the `defaults` channel, which is
-# close to worst-case for conda's classic SAT solver (the same slowness
-# mamba/micromamba exist to avoid). Using micromamba instead sidesteps the
-# problem entirely: it's a single static binary (`curl -Ls
-# https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj bin/micromamba`),
-# needs no bootstrap solve, and resolved this entire env (17 packages) in
-# ~17 seconds on the same login node where conda had been stuck for 1h+.
-#
-# xlensing and destacking are deliberately NOT listed here: they're the
-# actively-developed local checkouts (cluster_runs.md: "both xlensing and
-# destacking should run from their develop branches"), installed editable
-# from their cluster checkout paths after the env exists, not vendored
-# into this spec. cluster_toolkit is also left as a manual pip step since
-# it needs GSL (the `gsl` dependency below) and a C compiler at install
-# time (cffi-based build).
+# cluster_toolkit needs GSL (the `gsl` dependency below) and a C compiler at
+# install time, so it is installed with pip after the environment exists.
 name: destacking
 channels:
   - conda-forge

@@ -60,7 +60,7 @@ Z_SRC_RANGE = (0.0, 2.5)
 DELTA_M_REF = 0.1   # gamma_scan's reference Δm for the Δm-c modulation
 NWORKERS    = max(1, mp.cpu_count() - 1)
 
-OUT_DIR  = '/home/andre/github/destacking/notebooks/data'
+OUT_DIR  = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'notebooks', 'data')
 OUT_FITS = os.path.join(OUT_DIR, f'{OUT_PREFIX}_real_data.fits')
 OUT_BGS  = os.path.join(OUT_DIR, f'{OUT_PREFIX}_bgs.pkl')
 OUT_META = os.path.join(OUT_DIR, f'{OUT_PREFIX}_metadata.json')
