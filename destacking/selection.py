@@ -258,7 +258,10 @@ class MassPrior:
         N, K = len(z), len(self.grid)
         L = np.broadcast_to(self.grid, (N, K))
         Zg = np.broadcast_to(z[:, None], (N, K))
-        logw = np.log(self.pop.dn_dlogM(L, Zg))
+        key = (z.tobytes(), self.grid.tobytes())              # the mass function does not depend on theta: cache it
+        if getattr(self, "_hmf_key", None) != key:
+            self._hmf_key, self._hmf_val = key, np.log(self.pop.dn_dlogM(L, Zg))
+        logw = self._hmf_val.copy()
         mu = self.obs.mean(L, Zg, theta)                       # (N, K, n_obs)
         C = self.obs.cov_int(theta)
         ic = [self.obs.names.index(n) for n in self.cond]
