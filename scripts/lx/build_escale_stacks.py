@@ -37,17 +37,26 @@ def assign_bins(z, logLxE, nz=NZ, nl=NL):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--subset", default="all", choices=["all", "p95", "p90"])
+    ap.add_argument("--nz", type=int, default=NZ); ap.add_argument("--nl", type=int, default=NL)
+    a = ap.parse_args()
+    out = M if a.subset == "all" else f"{M}/subset_{a.subset}"
+    os.makedirs(out, exist_ok=True)
     t0 = time.time()
     np.random.seed(20261021)
     cat = Table.read(f"{D}/escale_des_sample.fits")
     stakes = pickle.load(open(f"{M}/stakes.pkl", "rb"))
     has = np.array([int(i) in stakes for i in cat["ID"]])
+    if a.subset != "all":
+        has &= np.asarray(cat[a.subset.upper()], bool)
     cat = cat[has]
     z = np.asarray(cat["Z"], float); llx = np.log10(np.asarray(cat["LX_EZ"], float))
-    zb, lb, z_edges, l_edges = assign_bins(z, llx)
+    zb, lb, z_edges, l_edges = assign_bins(z, llx, a.nz, a.nl)
     stacks = {}
-    for i in range(NZ):
-        for j in range(NL):
+    for i in range(a.nz):
+        for j in range(a.nl):
             m = (zb == i) & (lb == j)
             ids = np.asarray(cat["ID"])[m]
             bk = [stakes[int(c)].astype(float) for c in ids]
@@ -70,18 +79,18 @@ def main():
             fits[name] = dict(failed=True, error=repr(exc))
         print(f"  boost fit {name}: {fits[name]}", flush=True)
     pickle.dump(dict(stacks=stacks, z_edges=z_edges, lx_edges=l_edges, radii=R16, bin_limits=BL16, boost_fits=fits,
-                     nboot=NBOOT), open(f"{M}/stacks.pkl", "wb"))
+                     nboot=NBOOT), open(f"{out}/stacks.pkl", "wb"))
     ids_all = np.asarray(cat["ID"]); K = np.zeros((len(ids_all), 16))
     for n, c in enumerate(ids_all):
         sg, et, ex, w, R, mb = stakes[int(c)].astype(float)
         K[n] = np.dot((1 + mb) * w / sg ** 2, (R[:, None] > BL16[:, 0]) & (R[:, None] < BL16[:, 1]))
-    np.savez(f"{M}/weights.npz", ids=ids_all, K=K, radii=R16, bin_limits=BL16)
+    np.savez(f"{out}/weights.npz", ids=ids_all, K=K, radii=R16, bin_limits=BL16)
     R6 = np.logspace(-0.6, 0.6, 6); boost6 = np.ones((len(ids_all), 6)); stack_of = np.empty(len(ids_all), object)
     for n in range(len(ids_all)):
         nm = f"z{zb[n]}_lx{lb[n]}"; stack_of[n] = nm; f = fits[nm]
         if not f["failed"]:
             boost6[n] = boost_powerlaw_at_R(R6, f["B0"], f["Rs"], f["alpha"])
-    np.savez(f"{M}/boosts.npz", ids=ids_all, boost6=boost6, stack=stack_of.astype(str), radii=R6)
+    np.savez(f"{out}/boosts.npz", ids=ids_all, boost6=boost6, stack=stack_of.astype(str), radii=R6)
     print(f"done ({time.time()-t0:.0f}s): {len(stacks)} stacks, {len(ids_all)} clusters", flush=True)
 
 

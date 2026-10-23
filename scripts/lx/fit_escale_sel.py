@@ -82,17 +82,31 @@ def load_real(subset):
              "flux_conv": np.asarray(cat["LX"], float) / F, "logLx_obs": np.log10(np.asarray(cat["LX"], float))}
     joint = dict(d=a["data_vectors"] * b["boost6"], v=np.array([np.diag(c) for c in a["cov_matrices"]]) * b["boost6"] ** 2,
                  n=a["n_k"].astype(float), fl=a["floored"], R=a["radii"])
-    st = pickle.load(open(f"{M}/stacks.pkl", "rb")); W = np.load(f"{M}/weights.npz")
-    idrow = {int(i): k for k, i in enumerate(cat["ID"])}
-    stacks = [dict(name=nm, d=np.asarray(s["sigmas"], float), C=np.asarray(s["sigmas_cov"], float), n=s["n_stacked"],
-                   rows=np.array([idrow[int(i)] for i in s["ids"]])) for nm, s in sorted(st["stacks"].items())]
-    ts = json.load(open(f"{D}/fits/twostep.json"))["stacks"]
-    for s in stacks:
-        s["logM_fit"] = ts[s["name"]]["logM"]
-    if subset != "all":   # stacked frameworks need fresh stacks for a subset: only the joint fit is subset-aware
-        stacks = None
+    sd = M if subset == "all" else f"{M}/subset_{subset}"
+    stacks, K16, R16 = None, None, None
+    if os.path.exists(f"{sd}/stacks.pkl"):
+        st = pickle.load(open(f"{sd}/stacks.pkl", "rb")); W = np.load(f"{sd}/weights.npz")
+        sub_ids = np.asarray(cat["ID"])[keep]
+        assert np.all(W["ids"] == sub_ids), "stack weights must follow the subset's catalogue order"
+        idrow = {int(i): k for k, i in enumerate(sub_ids)}
+        stacks = [dict(name=nm, d=np.asarray(s["sigmas"], float), C=np.asarray(s["sigmas_cov"], float), n=s["n_stacked"],
+                       rows=np.array([idrow[int(i)] for i in s["ids"]])) for nm, s in sorted(st["stacks"].items())]
+        K16, R16 = W["K"], st["radii"]
+        if subset == "all":
+            ts = json.load(open(f"{D}/fits/twostep.json"))["stacks"]
+        else:     # per-stack single-halo fits of the subset's stacks (two-step first step), cached
+            cache = f"{sd}/stack_fits.json"
+            if not os.path.exists(cache):
+                import fit_escale as fe
+                from multiprocessing import Pool
+                fe.M = sd
+                with Pool(min(NPOOL, len(stacks))) as pool:
+                    json.dump(dict(pool.map(fe.fit_one_stack, [s["name"] for s in stacks])), open(cache, "w"), indent=1, default=float)
+            ts = json.load(open(cache))
+        for s in stacks:
+            s["logM_fit"] = ts[s["name"]]["logM"]
     return dict(x={k: v[keep] for k, v in xdata.items()}, joint={k: (v[keep] if k != "R" else v) for k, v in joint.items()},
-                stacks=stacks, K16=W["K"], R16=st["radii"], keep=keep, N=int(keep.sum()))
+                stacks=stacks, K16=K16, R16=R16, keep=keep, N=int(keep.sum()))
 
 
 def load_mock(path):
@@ -236,7 +250,16 @@ def twostep_det(data, tag):
         print(f"  {n:10s} {me:+.3f} +{hi - me:.3f}/-{me - lo:.3f}", flush=True)
 
 
-def run(mode, selection, data, tag):
+def resample(data, idx):
+    """Cluster bootstrap of the per-cluster (joint) data: the same clusters, drawn with replacement."""
+    out = dict(data)
+    out["x"] = {k: v[idx] for k, v in data["x"].items()}
+    out["joint"] = {k: (v[idx] if k != "R" else v) for k, v in data["joint"].items()}
+    out["stacks"], out["N"] = None, len(idx)
+    return out
+
+
+def run(mode, selection, data, tag, timeout=None):
     if mode == "twostep" and selection == "det":
         return twostep_det(data, tag)
     names = ["alpha", "beta", "gamma"] + (["sig_int"] if selection != "det" else []) + (["f_mis", "sigma_off"] if mode != "twostep" else [])
@@ -252,7 +275,11 @@ def run(mode, selection, data, tag):
     print(f"{tag}: N={data['N']}, one likelihood call {1e3 * (time.time() - t) / 3:.0f} ms", flush=True)
     t0 = time.time()
     smp = Sampler(pr, L.loglike, n_live=1000, pool=NPOOL, seed=1)
-    smp.run(verbose=True, n_eff=3000)
+    ok = smp.run(verbose=True, n_eff=3000, timeout=timeout) if timeout else smp.run(verbose=True, n_eff=3000)
+    if timeout and (ok is False or getattr(smp, "n_eff", 3000) < 1000):   # as paper 1.1 joint_sh.py: skip, draw another
+        print(f"{tag}: NOT CONVERGED within {timeout:.0f} s, skipped", flush=True)
+        os.makedirs(OUT, exist_ok=True); open(f"{OUT}/{tag}.skipped", "w").write("timeout\n")
+        return
     X, lw, ll = smp.posterior(); w = np.exp(lw - lw.max()); w /= w.sum()
     os.makedirs(OUT, exist_ok=True)
     np.savez(f"{OUT}/{tag}.npz", samples=X, weights=w, log_l=ll, param_order=np.array(names), log_z=smp.log_z,
@@ -277,9 +304,25 @@ if __name__ == "__main__":
     ap.add_argument("--subset", default="all", choices=["all", "p95", "p90"])
     ap.add_argument("--data", default=None, help="mock .npz (see make_escale_mock.py); default: real data")
     ap.add_argument("--tag", default="")
+    ap.add_argument("--boot", type=int, nargs=2, default=None, metavar=("B0", "B1"),
+                    help="joint only: run cluster bootstraps until B1-B0 have converged, starting at draw B0 "
+                         "(resampling seed 7000+b, as paper 1.1); unconverged draws are skipped and replaced (at most 10 extra)")
+    ap.add_argument("--timeout", type=float, default=2400.0, help="per-bootstrap sampler time limit [s]")
     a = ap.parse_args()
     data = load_mock(a.data) if a.data else load_real(a.subset)
     if a.mode != "joint" and data["stacks"] is None:
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
     tag = f"{a.mode}_{a.selection}_{a.subset}" + (f"_{a.tag}" if a.tag else "")
-    run(a.mode, a.selection, data, tag)
+    if a.boot:
+        if a.mode != "joint":
+            raise SystemExit("--boot is for the joint fit")
+        b0, b1 = a.boot; want = b1 - b0; b = b0
+        done = lambda: sum(os.path.exists(f"{OUT}/{tag}_b{k:03d}.npz") for k in range(b0, b))
+        while done() < want and b < b1 + 10:
+            tb = f"{tag}_b{b:03d}"
+            if not (os.path.exists(f"{OUT}/{tb}.npz") or os.path.exists(f"{OUT}/{tb}.skipped")):
+                idx = np.random.default_rng(7000 + b).integers(0, data["N"], data["N"])
+                run(a.mode, a.selection, resample(data, idx), tb, timeout=a.timeout)
+            b += 1
+    else:
+        run(a.mode, a.selection, data, tag)
