@@ -170,9 +170,10 @@ def hard_cut(name, var, lo=-np.inf, hi=np.inf):
     return Stage(name, (var,), lambda d: ((d[var] > lo) & (d[var] < hi)).astype(float))
 
 
-def erf_completeness(name, var, x50, width):
-    """P = [1 + erf((x - x50) / (sqrt(2) width))] / 2 -- e.g. a detection threshold in a noisy measured quantity."""
-    return Stage(name, (var,), lambda d: 0.5 * (1 + erf((d[var] - x50) / (np.sqrt(2) * width))))
+def erf_completeness(name, var, x50, width, floor=0.0):
+    """P = floor + (1 - floor) [1 + erf((x - x50) / (sqrt(2) width))] / 2 -- a detection threshold in a noisy
+    measured quantity, optionally with a constant completeness ``floor`` far below the threshold."""
+    return Stage(name, (var,), lambda d: floor + (1 - floor) * 0.5 * (1 + erf((d[var] - x50) / (np.sqrt(2) * width))))
 
 
 def signal_to_noise_cut(name, var, err_var, snr_min):

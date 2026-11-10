@@ -32,12 +32,15 @@ import build_escale_stacks as bes
 
 D = os.path.expanduser("~/destacking_data/lx_splus_erosita_des")
 TRUTH = dict(alpha=0.47, beta=1.11, gamma=0.0, sig_int=0.17, f_mis=0.3, sigma_off=0.15)
+FLUXERR_A, FLUXERR_B, FLUXERR_SCATTER = -6.024, 0.575, 0.115
+VERSION = "v2"   # v2: realistic flux errors + optical stage from Doubrawa (fit_escale_sel.OPT version 2)
 R6 = np.logspace(-0.6, 0.6, 6); d6 = np.diff(np.log10(R6))[0]
 e6 = np.logspace(np.log10(R6[0]) - d6 / 2, np.log10(R6[-1]) + d6 / 2, 7); BL6 = np.column_stack([e6[:-1], e6[1:]])
 
 
 def main():
     seed = int(sys.argv[1]); area = float(sys.argv[2]) if len(sys.argv) > 2 else 830.0
+    dry = "--dry" in sys.argv
     rng = np.random.default_rng(seed); t0 = time.time()
     cat = Table.read(f"{D}/escale_des_sample.fits")
     raw = Table.read(f"{D}/gas_mass_uniqueIDs_AME_r200.fits")
@@ -53,20 +56,27 @@ def main():
     s = pop.sample(rng=rng, logM_min=11.8)
     N = len(s["z"])
     mu_l = lx.lx_from_mass(s["logM"], s["z"], TRUTH["alpha"], TRUTH["beta"], TRUTH["gamma"], fs.PIV)
-    mu_lam = fs.OPT["lam0"] + fs.OPT["b_lam"] * (s["logM"] - fs.PIV.log_M)
+    mu_lam = fs.OPT["lam0"] + fs.OPT["b_lam"] * (s["logM"] - fs.OPT["logM_piv"])
     cov = np.array([[TRUTH["sig_int"] ** 2, fs.OPT["rho"] * TRUTH["sig_int"] * fs.OPT["sig_lam"]],
                     [fs.OPT["rho"] * TRUTH["sig_int"] * fs.OPT["sig_lam"], fs.OPT["sig_lam"] ** 2]])
     dev = rng.multivariate_normal([0, 0], cov, N)
     logLx, loglam = mu_l + dev[:, 0], mu_lam + dev[:, 1]
     conv = 4 * np.pi * xc.cosmology.luminosity_distance(s["z"]).to_value("cm") ** 2 * K_MED
-    sF = rng.choice(eF_r, N)
+    # flux errors (version 2, 2026-11-10): as the real catalogue, log sigma_F = A + B log F with 0.115 dex scatter
+    # (fitted to the 1556 real clusters), evaluated at the true flux; version 1 drew sigma_F independently of flux,
+    # which gave S/N of several hundred for bright mock clusters (real eSCALE stops near 30)
+    F_true = 10 ** logLx / conv
+    sF = 10 ** (FLUXERR_A + FLUXERR_B * np.log10(F_true) + FLUXERR_SCATTER * rng.standard_normal(N))
     Fo = 10 ** logLx / conv + sF * rng.standard_normal(N)
     lam_o = loglam + fs.OPT["lam_err"] * rng.standard_normal(N)
     from scipy.special import erf
-    p_opt = 0.5 * (1 + erf((lam_o - fs.OPT["x50"]) / (np.sqrt(2) * fs.OPT["width"])))
+    p_opt = fs.OPT["floor"] + (1 - fs.OPT["floor"]) * 0.5 * (1 + erf((lam_o - fs.OPT["x50"]) / (np.sqrt(2) * fs.OPT["width"])))
     sel = (Fo >= 2 * sF) & (rng.random(N) < p_opt)
     idx = np.flatnonzero(sel)
-    print(f"parent {N}, selected {len(idx)} (real sample {len(cat)}) ({time.time()-t0:.0f}s)", flush=True)
+    print(f"parent {N}, selected {len(idx)} (real sample {len(cat)}); selected flux S/N 5/50/95/max = "
+          f"{np.percentile(Fo[idx] / sF[idx], [5, 50, 95, 100]).round(1)} ({time.time()-t0:.0f}s)", flush=True)
+    if dry:
+        return
 
     # 4: pair with real clusters by redshift rank, without reuse
     n = min(len(idx), len(cat))
@@ -124,7 +134,7 @@ def main():
 
     # 6: per-stack fits (two-step first step), reusing fit_escale.fit_one_stack on a mock stacks file
     out_dir = f"{D}/mocks"; os.makedirs(out_dir, exist_ok=True)
-    tmpdir = f"{out_dir}/stacks_{seed}"; os.makedirs(tmpdir, exist_ok=True)
+    tmpdir = f"{out_dir}/stacks_{seed}_{VERSION}"; os.makedirs(tmpdir, exist_ok=True)
     pickle.dump(dict(stacks=stacks_pkl, radii=R16), open(f"{tmpdir}/stacks.pkl", "wb"))
     import fit_escale as fe
     fe.M = tmpdir
@@ -134,12 +144,12 @@ def main():
     s_logM_fit = [res[nm]["logM"] for nm in s_names]
     print(f"per-stack fits done ({time.time()-t0:.0f}s)", flush=True)
 
-    np.savez(f"{out_dir}/mock_{seed}.npz", **{f"x_{k}": v for k, v in x.items()},
+    np.savez(f"{out_dir}/mock_{seed}_{VERSION}.npz", **{f"x_{k}": v for k, v in x.items()},
              j_d=DV, j_v=np.array([np.diag(c) for c in COV]), j_n=NK, j_fl=FL, j_R=R6,
              s_names=np.array(s_names), s_d=np.array(s_d), s_C=np.array(s_C), s_n=np.array(s_n),
              s_rows=np.array(s_rows, dtype=object), s_logM_fit=np.array(s_logM_fit), K16=den, R16=R16, two_halo=True,
              logM_true=logM_true, truth=json.dumps(TRUTH), opt=json.dumps(fs.OPT), seed=seed, area=area)
-    print(f"wrote {out_dir}/mock_{seed}.npz ({time.time()-t0:.0f}s)", flush=True)
+    print(f"wrote {out_dir}/mock_{seed}_{VERSION}.npz ({time.time()-t0:.0f}s)", flush=True)
 
 
 if __name__ == "__main__":

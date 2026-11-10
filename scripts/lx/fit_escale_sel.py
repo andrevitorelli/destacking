@@ -38,7 +38,16 @@ OUT = f"{D}/fits_sel"
 PIV = lx.Pivots(43.26, 14.1, 0.18)
 GRID = np.linspace(11.8, 15.8, 61)
 SOFF = np.linspace(0.01, 1.0, 34)
-OPT = dict(lam0=1.0, b_lam=0.8, sig_lam=0.2, rho=0.3, x50=0.8, width=0.1, lam_err=0.1)
+# Optical stage (option B).  Version 2 (2026-11-10), from L. Doubrawa (priv. comm., SCALE II):
+#  - richness-mass relation for the M_r < -20 AME richness (linmix on the 95%-purity sample, with the catalogue's
+#    L_X-based M200c): log10(lambda/11.51) = 0.006 + 0.350 log10(M/1.53e14), scatter 0.184 dex;
+#  - completeness of X-ray-detected systems against log10(lambda) from SCALE II Fig. 8 (purple curve, 1 - y),
+#    fitted (unweighted; counts per bin unclear) with floor + (1 - floor) Phi((log lambda - x50)/width).
+# rho (correlation of the lambda and L_X scatters) and lam_err (AME richness error, dex) remain assumptions.
+# Version 1 (placeholder, all fits before 2026-11-10): lam0=1.0 at logM_piv=14.1, b_lam=0.8, sig_lam=0.2, rho=0.3,
+# x50=0.8, width=0.1, floor=0, lam_err=0.1.
+OPT = dict(version=2, lam0=np.log10(11.51) + 0.006, logM_piv=np.log10(1.53e14), b_lam=0.350, sig_lam=0.184, rho=0.3,
+           x50=1.307, width=0.307, floor=0.245, lam_err=0.1)
 PRI = {"alpha": stats.uniform(-2, 4), "beta": stats.uniform(0.3, 2.7), "gamma": stats.uniform(-15, 30),
        "sig_int": stats.uniform(0.02, 0.98), "f_mis": stats.uniform(0, 1), "sigma_off": stats.uniform(0.01, 0.99)}
 NPOOL = int(os.environ.get("NPOOL", "15"))
@@ -48,11 +57,11 @@ NPOOL = int(os.environ.get("NPOOL", "15"))
 def make_prior(selection, z_range=(0.08, 0.25)):
     rel_lx = Relation("logLx", lambda m, z, t: lx.lx_from_mass(m, z, t["alpha"], t["beta"], t["gamma"], PIV),
                       lambda t: t["sig_int"])
-    rel_lam = Relation("logLam", lambda m, z, t: OPT["lam0"] + OPT["b_lam"] * (m - PIV.log_M), lambda t: OPT["sig_lam"])
+    rel_lam = Relation("logLam", lambda m, z, t: OPT["lam0"] + OPT["b_lam"] * (m - OPT["logM_piv"]), lambda t: OPT["sig_lam"])
     om = ObservableModel([rel_lx, rel_lam], corr=lambda t: np.array([[1, OPT["rho"]], [OPT["rho"], 1]]))
     xray = Stage("X-ray flux S/N >= 2", ("flux_obs", "flux_err"),
                  lambda d: (np.asarray(d["flux_obs"]) >= 2 * np.asarray(d["flux_err"])).astype(float))
-    stages = [xray] + ([erf_completeness("optical detection", "logLam_obs", OPT["x50"], OPT["width"])]
+    stages = [xray] + ([erf_completeness("optical detection", "logLam_obs", OPT["x50"], OPT["width"], OPT["floor"])]
                        if selection == "AB" else [])
 
     def flux_meas(true, d):
