@@ -159,12 +159,50 @@ def fig_results(out):
     print("\n" + "\n".join(lines))
 
 
+def fig_purity(out):
+    """alpha, beta, gamma, sigma_int against the purity cut of the (nested) samples."""
+    pars = [("alpha", r"$\alpha$"), ("beta", r"$\beta$"), ("gamma", r"$\gamma$"), ("sig_int", r"$\sigma_{\rm int}$ [dex]")]
+    series = [("placeholder", "", "0.45", "joint"), ("placeholder", "", "0.45", "forward"),
+              ("Lia, $\\lambda_{\\min}=5$", "_opt2lmin5", "C0", "joint"), ("Lia, $\\lambda_{\\min}=5$", "_opt2lmin5", "C0", "forward")]
+    xs = np.arange(3)
+    xl = ["all\n(no cut, N = 1556)", "purity $\\geq$ 90%\n(N = 1024)", "purity $\\geq$ 95%\n(N = 496)"]
+    fig, ax = plt.subplots(1, 4, figsize=(15, 4.3))
+    for k, (lab, tag, c, mode) in enumerate(series):
+        dx = (k - 1.5) * 0.09
+        for i, (pn, pl) in enumerate(pars):
+            q = []
+            for _, sub in SAMPLES:
+                pre = f"{F}/{mode}_AB_{sub}{tag}"
+                bq = boot_quant(pre, pn)[0] if mode == "joint" else None
+                q.append(bq if bq is not None else quant(pre + ".npz", pn))
+            q = np.array(q)
+            ax[i].errorbar(xs + dx, q[:, 1], yerr=[q[:, 1] - q[:, 0], q[:, 2] - q[:, 1]], color=c, capsize=3,
+                           marker="o" if mode == "joint" else "s", mfc=c if mode == "joint" else "white",
+                           ls="-" if mode == "joint" else ":", lw=1.5 if mode == "joint" else 1,
+                           label=f"{lab}, {'joint (bootstrap)' if mode == 'joint' else 'forward stacks'}")
+    ax[1].axhspan(1.11 - 0.15, 1.11 + 0.15, color="k", alpha=0.08, label="Pederneiras+25 eRASS1")
+    ax[2].axhspan(-0.79, 0.79, color="k", alpha=0.08)
+    ax[1].axhline(1.11, color="k", ls="--", lw=0.8); ax[2].axhline(0, color="k", ls="--", lw=0.8)
+    for a, (pn, pl) in zip(ax, pars):
+        a.set_xticks(xs); a.set_xticklabels(xl, fontsize=8); a.set_ylabel(pl); a.set_xlim(-0.4, 2.4)
+    ax[2].set_ylim(-16, 10)
+    h, l = ax[1].get_legend_handles_labels()
+    fig.legend(h, l, loc="lower center", ncol=5, fontsize=8, frameon=False)
+    fig.suptitle("eSCALE $L_X$–$M$ against X-ray–optical match purity (A+B selection; samples are nested)", fontsize=11)
+    fig.tight_layout(rect=(0, 0.07, 1, 1))
+    fig.savefig(f"{out}/lxm_2026-11-11_purity_trends.png", dpi=150)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=f"{D}/figures")
     ap.add_argument("--skip-prior", action="store_true")
+    ap.add_argument("--only-purity", action="store_true")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    fig_purity(a.out)
+    if a.only_purity:
+        raise SystemExit
     fig_stage(a.out)
     fig_results(a.out)
     if not a.skip_prior:
