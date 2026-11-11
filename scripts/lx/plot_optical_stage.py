@@ -13,6 +13,7 @@ import argparse
 import glob
 import json
 import os
+import re
 
 import matplotlib
 matplotlib.use("Agg")
@@ -58,7 +59,8 @@ def quant(path, name):
 
 
 def boot_quant(prefix, name):
-    meds = [quant(f, name)[1] for f in sorted(glob.glob(f"{prefix}_b[0-9][0-9][0-9].npz"))]
+    fs_ = [f for f in glob.glob(f"{prefix}_b*.npz") if re.fullmatch(r"_b\d+\.npz", f[len(prefix):])]   # b000..b4900
+    meds = [quant(f, name)[1] for f in sorted(fs_)]
     return (np.percentile(meds, [16, 50, 84]), len(meds)) if len(meds) >= 10 else (None, len(meds))
 
 
