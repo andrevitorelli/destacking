@@ -47,7 +47,11 @@ SOFF = np.linspace(0.01, 1.0, 34)
 # Version 1 (placeholder, all fits before 2026-11-10): lam0=1.0 at logM_piv=14.1, b_lam=0.8, sig_lam=0.2, rho=0.3,
 # x50=0.8, width=0.1, floor=0, lam_err=0.1.
 OPT = dict(version=2, lam0=np.log10(11.51) + 0.006, logM_piv=np.log10(1.53e14), b_lam=0.350, sig_lam=0.184, rho=0.3,
-           x50=1.307, width=0.307, floor=0.245, lam_err=0.1)
+           x50=1.307, width=0.307, floor=0.245, lam_err=0.1, lam_min=None, w_min=0.1)
+# lam_min (version 2b, 2026-11-10): Fig. 8 is a completeness RELATIVE to X-ray systems identified by some optical
+# catalogue, so its low-richness floor is not an absolute detection probability. With lam_min set, the stage is
+#   P = Phi((log lam - log lam_min)/w_min) * [floor + (1 - floor) Phi((log lam - x50)/width)],
+# i.e. completeness goes to zero below a minimum richness (SCALE II matching needs sum P_mem >~ 2-5).
 PRI = {"alpha": stats.uniform(-2, 4), "beta": stats.uniform(0.3, 2.7), "gamma": stats.uniform(-15, 30),
        "sig_int": stats.uniform(0.02, 0.98), "f_mis": stats.uniform(0, 1), "sigma_off": stats.uniform(0.01, 0.99)}
 NPOOL = int(os.environ.get("NPOOL", "15"))
@@ -61,8 +65,15 @@ def make_prior(selection, z_range=(0.08, 0.25)):
     om = ObservableModel([rel_lx, rel_lam], corr=lambda t: np.array([[1, OPT["rho"]], [OPT["rho"], 1]]))
     xray = Stage("X-ray flux S/N >= 2", ("flux_obs", "flux_err"),
                  lambda d: (np.asarray(d["flux_obs"]) >= 2 * np.asarray(d["flux_err"])).astype(float))
-    stages = [xray] + ([erf_completeness("optical detection", "logLam_obs", OPT["x50"], OPT["width"], OPT["floor"])]
-                       if selection == "AB" else [])
+    if OPT["lam_min"] is None:
+        opt_stage = erf_completeness("optical detection", "logLam_obs", OPT["x50"], OPT["width"], OPT["floor"])
+    else:   # one stage: both factors read the same latent richness, so they must be averaged together
+        from scipy.special import erf as _erf
+        lmin, wmin = np.log10(OPT["lam_min"]), OPT["w_min"]
+        opt_stage = Stage("optical detection with minimum richness", ("logLam_obs",),
+                          lambda d: 0.5 * (1 + _erf((d["logLam_obs"] - lmin) / (np.sqrt(2) * wmin)))
+                          * (OPT["floor"] + (1 - OPT["floor"]) * 0.5 * (1 + _erf((d["logLam_obs"] - OPT["x50"]) / (np.sqrt(2) * OPT["width"])))))
+    stages = [xray] + ([opt_stage] if selection == "AB" else [])
 
     def flux_meas(true, d):
         F = np.asarray(d["flux_obs"])[:, None, None]; s = np.asarray(d["flux_err"])[:, None, None]
@@ -313,11 +324,14 @@ if __name__ == "__main__":
     ap.add_argument("--subset", default="all", choices=["all", "p95", "p90"])
     ap.add_argument("--data", default=None, help="mock .npz (see make_escale_mock.py); default: real data")
     ap.add_argument("--tag", default="")
+    ap.add_argument("--lam-min", type=float, default=None, help="minimum AME richness of the optical stage (OPT version 2b)")
     ap.add_argument("--boot", type=int, nargs=2, default=None, metavar=("B0", "B1"),
                     help="joint only: run cluster bootstraps until B1-B0 have converged, starting at draw B0 "
                          "(resampling seed 7000+b, as paper 1.1); unconverged draws are skipped and replaced (at most 10 extra)")
     ap.add_argument("--timeout", type=float, default=2400.0, help="per-bootstrap sampler time limit [s]")
     a = ap.parse_args()
+    if a.lam_min is not None:
+        OPT["lam_min"] = a.lam_min
     data = load_mock(a.data) if a.data else load_real(a.subset)
     if a.mode != "joint" and data["stacks"] is None:
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
