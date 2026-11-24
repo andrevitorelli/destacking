@@ -15,7 +15,8 @@ several magnitude catalogues): the partner from the brightest-limit (-20) catalo
 
 Output: ~/destacking_data/lx_splus_erosita_des/randoms/escale_random_pool.fits with the columns of
 escale_des_sample.fits (+ MAG, FLUX, FLUX_ERR, RP80/RP90/RP95 = the pair appears in that level's random file),
-ID = 1e9 + CID (never collides with the real S-PLUS IDs), and contamination.json with the per-level counts.
+ID = 1e9 + CID (never collides with the real S-PLUS IDs), and contamination.json with the per-level counts and the highest-flag tiers
+(tier = highest purity flag; the flags are not nested, every real cluster has at least one) used by the mixture model.
 usage: python build_random_pool.py
 """
 import glob
@@ -106,6 +107,11 @@ def main():
     out["FLUX"], out["FLUX_ERR"] = p["flux"], p["eflux"]
     for lev in (80, 90, 95):
         out[f"RP{lev}"] = np.array([lev in pair_lev[(r["cid"], r["opt"], r["mag"])] for r in p])
+    # any-magnitude flags per X-ray source (as the real catalogue's flags), for the purity tiers of the mixture model
+    for lev in (80, 90, 95):
+        cids = set(a["cid"][a["lev"] == lev].tolist())
+        out[f"AP{lev}"] = np.isin(p["cid"], list(cids))
+    out["TIER"] = np.where(out["AP95"], 95, np.where(out["AP90"], 90, 80))
     out.meta["COSMO"] = "FlatLambdaCDM H0=70 Om0=0.3"
     out.meta["CENTRE"] = "X-ray peak; optical partner = chance match (catalogue shifted by 10 deg in RA)"
     out.write(f"{OUT}/escale_random_pool.fits", overwrite=True)
@@ -114,7 +120,12 @@ def main():
     log.append(f"per-level unique X-ray sources after cuts: {counts}")
     real = Table.read(f"{D}/escale_des_sample.fits")
     n_real = {80: int(real["P80"].sum()), 90: int(real["P90"].sum()), 95: int(real["P95"].sum()), "all": len(real)}
-    json.dump(dict(n_random_after_cuts=counts, n_real=n_real,
+    tr = np.where(np.asarray(real["P95"], bool), 95, np.where(np.asarray(real["P90"], bool), 90, 80))
+    tiers = {t: dict(n_random=int((out["TIER"] == t).sum()), n_real=int((tr == t).sum())) for t in (95, 90, 80)}
+    for t in tiers:
+        tiers[t]["q"] = tiers[t]["n_random"] / tiers[t]["n_real"]
+    log.append("highest-flag tiers (random / real = q): " + ", ".join(f"{t}: {v['n_random']}/{v['n_real']} = {v['q']:.3f}" for t, v in tiers.items()))
+    json.dump(dict(n_random_after_cuts=counts, n_real=n_real, tiers=tiers,
                    ratio={lev: counts[lev] / n_real[lev] for lev in (80, 90, 95)}), open(f"{OUT}/contamination.json", "w"), indent=1)
     log.append(f"real sample: {n_real}; N_rand/N_real: " + ", ".join(f"p{l} {counts[l] / n_real[l]:.3f}" for l in (80, 90, 95)))
     print("\n".join(log))

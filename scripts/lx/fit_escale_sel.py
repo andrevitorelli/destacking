@@ -53,7 +53,8 @@ OPT = dict(version=2, lam0=np.log10(11.51) + 0.006, logM_piv=np.log10(1.53e14), 
 #   P = Phi((log lam - log lam_min)/w_min) * [floor + (1 - floor) Phi((log lam - x50)/width)],
 # i.e. completeness goes to zero below a minimum richness (SCALE II matching needs sum P_mem >~ 2-5).
 PRI = {"alpha": stats.uniform(-2, 4), "beta": stats.uniform(0.3, 2.7), "gamma": stats.uniform(-15, 30),
-       "sig_int": stats.uniform(0.02, 0.98), "f_mis": stats.uniform(0, 1), "sigma_off": stats.uniform(0.01, 0.99)}
+       "sig_int": stats.uniform(0.02, 0.98), "f_mis": stats.uniform(0, 1), "sigma_off": stats.uniform(0.01, 0.99),
+       "q95": stats.uniform(0, 1), "q90": stats.uniform(0, 1), "q80": stats.uniform(0, 1), "q0": stats.uniform(0, 1)}
 NPOOL = int(os.environ.get("NPOOL", "15"))
 
 
@@ -125,6 +126,9 @@ def load_real(subset):
             ts = json.load(open(cache))
         for s in stacks:
             s["logM_fit"] = ts[s["name"]]["logM"]
+    tier = np.where(np.asarray(cat["P95"], bool), 95, np.where(np.asarray(cat["P90"], bool), 90,
+                    np.where(np.asarray(cat["P80"], bool), 80, 0)))      # highest flag; never 0 in the real sample
+    xdata["tier"] = tier
     return dict(x={k: v[keep] for k, v in xdata.items()}, joint={k: (v[keep] if k != "R" else v) for k, v in joint.items()},
                 stacks=stacks, K16=K16, R16=R16, keep=keep, N=int(keep.sum()))
 
@@ -163,6 +167,53 @@ def mis_at(mis, so):
     return (1 - t) * mis[j] + t * mis[j + 1]
 
 
+# ── contamination (chance X-ray-optical matches), 2026-11-24 ─────────────────
+# Mixture per cluster: L_c = (1 - q_c) sum_k w_ck L_c(DS | M_k) + q_c L_c(DS | chance-match template).
+# q_c by purity tier from the random catalogues (randoms/contamination.json, counts after our cuts):
+#   tier = highest purity flag (95; 90 = P90 not P95; 80 = only P80; the flags are not nested), q = N_rand/N_real per
+#   tier, both after our cuts (contamination.json "tiers"; random flags = any magnitude catalogue, like the real ones).  Injected samples (validation): every
+#   member gets the sample-average q = (n95 + n_add)/(N95 + n_add), i.e. the model does not know who was injected.
+# Template: boosted random-pool profiles fitted as DS_b = A_b (L_X E^-1 / 10^43.2)^s, plus a per-bin extra variance
+#   sig2_b (profile-to-profile scatter beyond measurement noise); template_half="A" uses only CID-even pool members
+#   (and injection then draws only CID-odd ones), so validation never fits the template on the injected randoms.
+CONTAM = dict(mode="none", q_below80=0.85, template_half="all")
+
+
+def tier_q():
+    """q per highest-flag tier (95: P95; 90: P90, not P95; 80: only P80) = N_rand(tier) / N_real(tier) after our cuts
+    (the flags are not nested; every real cluster has at least one, so tier 0 never occurs in the real sample)."""
+    c = json.load(open(f"{D}/randoms/contamination.json"))
+    q = {int(t): v["q"] for t, v in c["tiers"].items()}
+    q[0] = CONTAM["q_below80"]
+    return q
+
+
+def chance_template(half="all"):
+    """Fit DS_b = A_b (L/1e43.2)^s to the (boosted) random-pool profiles; returns (A_b, s, sig2_b, n_used)."""
+    from cluster_toolkit.boostfactors import boost_powerlaw_at_R
+    from scipy.optimize import least_squares
+    pool = Table.read(f"{D}/randoms/escale_random_pool.fits"); a = np.load(f"{D}/randoms/measurement/joint6.npz")
+    use = np.ones(len(pool), bool) if half == "all" else (np.asarray(pool["CID"]) % 2 == 0)
+    st = pickle.load(open(f"{M}/stacks.pkl", "rb"))
+    z = np.asarray(pool["Z"], float); llx = np.log10(np.asarray(pool["LX_EZ"], float))
+    b6 = np.ones((len(pool), 6))
+    for n in range(len(pool)):
+        zb = int(np.clip(np.searchsorted(st["z_edges"], z[n], side="right") - 1, 0, len(st["z_edges"]) - 2))
+        ed = st["lx_edges"][zb]; lb = int(np.clip(np.searchsorted(ed, llx[n], side="right") - 1, 0, len(ed) - 2))
+        f = st["boost_fits"][f"z{zb}_lx{lb}"]
+        if not f["failed"]:
+            b6[n] = boost_powerlaw_at_R(a["radii"], f["B0"], f["Rs"], f["alpha"])
+    d = (a["data_vectors"] * b6)[use]; v = (np.array([np.diag(c) for c in a["cov_matrices"]]) * b6 ** 2)[use]
+    x = (llx - 43.2)[use]
+    ok = np.isfinite(d) & np.isfinite(v) & (v > 0)
+    res = lambda t: np.where(ok, (np.where(ok, d, 0) - t[:6] * 10 ** (t[6] * x)[:, None]) / np.sqrt(np.where(ok, v, 1)), 0).ravel()
+    t = least_squares(res, x0=np.r_[np.full(6, 10.0), 0.5]).x
+    A, sl = t[:6], t[6]
+    r2 = np.where(ok, (np.where(ok, d, 0) - A * 10 ** (sl * x)[:, None]) ** 2 - np.where(ok, v, 0), np.nan)
+    sig2 = np.clip(np.nanmean(r2, 0), 0, None)
+    return A, sl, sig2, int(use.sum())
+
+
 # ── likelihoods ──────────────────────────────────────────────────────────────
 class Joint:
     def __init__(self, data, selection):
@@ -179,6 +230,33 @@ class Joint:
             self.cen, self.mis, self.th = profile_tables(self.x["z"], j["R"], self.two_halo)
             self.mp = make_prior(selection)
         self.N = len(self.x["z"])
+        self.contam = CONTAM["mode"] != "none" and not self.det
+        if self.contam:
+            A, sl, sig2, nu = chance_template(CONTAM["template_half"])
+            llx = self.x["logLx_obs"] - np.log10(lx.efunc(self.x["z"])) - 43.2
+            ds_c = A[None, :] * 10 ** (sl * llx)[:, None]
+            vv = self.v0 + sig2[None, :]
+            qq = (self.d0 - ds_c) ** 2 / vv
+            # Gaussian bins carry the variance-ratio term, since the template's extra variance changes the normalisation
+            self.ll_chance = (-0.5 * np.where(self.sh, self.n * np.log1p(qq / np.maximum(self.n - 1, 1)), 0).sum(-1)
+                              - 0.5 * np.where(self.ga, qq + np.log(vv / self.v0), 0).sum(-1))
+            self.tier = np.asarray(self.x["tier"])
+            tq = tier_q()
+            n_inj = int((self.tier == -1).sum())
+            if n_inj:
+                c = json.load(open(f"{D}/randoms/contamination.json"))
+                qa = (c["n_random_after_cuts"]["95"] + n_inj) / (c["n_real"]["95"] + n_inj)
+                self.q_fixed = np.full(self.N, qa)
+            else:
+                self.q_fixed = np.array([tq[int(t)] for t in self.tier])
+            print(f"contamination mixture ({CONTAM['mode']}): template from {nu} randoms, A_b = {np.round(A, 1)}, "
+                  f"slope {sl:.2f}, extra sigma_b = {np.round(np.sqrt(sig2), 1)}; q by tier {dict((k, round(v, 3)) for k, v in tq.items())}"
+                  + (f"; injected sample: q = {self.q_fixed[0]:.3f} for all" if n_inj else ""), flush=True)
+
+    def q_of(self, p):
+        if CONTAM["mode"] == "free":
+            return np.select([self.tier == 95, self.tier == 90, self.tier == 80], [p["q95"], p["q90"], p["q80"]], p.get("q0", 1.0))
+        return self.q_fixed
 
     def loglike(self, p):
         if self.det:
@@ -196,7 +274,11 @@ class Joint:
               - 0.5 * np.where(self.ga[:, None, :], q, 0).sum(-1))                                      # (N,K)
         a = np.log(np.clip(w, 1e-300, None)) + ll
         mx = a.max(1, keepdims=True)
-        tot = float(np.sum(mx[:, 0] + np.log(np.exp(a - mx).sum(1))))
+        lg = mx[:, 0] + np.log(np.exp(a - mx).sum(1))
+        if self.contam:
+            q = np.clip(self.q_of(p), 1e-9, 1 - 1e-9)
+            lg = np.logaddexp(np.log1p(-q) + lg, np.log(q) + self.ll_chance)
+        tot = float(np.sum(lg))
         return tot if np.isfinite(tot) else -np.inf
 
 
@@ -292,6 +374,8 @@ def load_injected(base, n_add, seed):
     assert np.all(a["ids"] == np.asarray(pool["ID"]))
     base_cid = set(np.asarray(Table.read(f"{D}/escale_des_sample.fits")["CID"])[data["keep"]].astype(int))
     avail = np.flatnonzero(~np.isin(np.asarray(pool["CID"]).astype(int), list(base_cid)))
+    if CONTAM["template_half"] == "A":     # validation: template from half A, inject only from half B
+        avail = avail[np.asarray(pool["CID"])[avail] % 2 == 1]
     if n_add > len(avail):
         raise SystemExit(f"only {len(avail)} randoms available")
     pick = np.sort(np.random.default_rng(seed).choice(avail, n_add, replace=False))
@@ -307,7 +391,7 @@ def load_injected(base, n_add, seed):
             b6[n] = boost_powerlaw_at_R(a["radii"], f["B0"], f["Rs"], f["alpha"])
     F, eF = np.asarray(pool["FLUX"], float)[pick], np.asarray(pool["FLUX_ERR"], float)[pick]
     LX = np.asarray(pool["LX"], float)[pick]
-    xr = {"z": z, "flux_obs": F, "flux_err": eF, "flux_conv": LX / F, "logLx_obs": np.log10(LX)}
+    xr = {"z": z, "flux_obs": F, "flux_err": eF, "flux_conv": LX / F, "logLx_obs": np.log10(LX), "tier": np.full(n_add, -1)}
     jr = dict(d=a["data_vectors"][pick] * b6, v=np.array([np.diag(c) for c in a["cov_matrices"][pick]]) * b6 ** 2,
               n=a["n_k"][pick].astype(float), fl=a["floored"][pick])
     out = dict(data)
@@ -323,6 +407,9 @@ def run(mode, selection, data, tag, timeout=None):
     if mode == "twostep" and selection == "det":
         return twostep_det(data, tag)
     names = ["alpha", "beta", "gamma"] + (["sig_int"] if selection != "det" else []) + (["f_mis", "sigma_off"] if mode != "twostep" else [])
+    if mode == "joint" and CONTAM["mode"] == "free":
+        tiers = set(np.asarray(data["x"]["tier"]).tolist())
+        names += [f"q{t}" for t in (95, 90, 80, 0) if t in tiers]
     L = {"joint": Joint, "forward": Forward, "twostep": TwoStep}[mode](data, selection)
     from nautilus import Prior, Sampler
     pr = Prior()
@@ -343,7 +430,7 @@ def run(mode, selection, data, tag, timeout=None):
     X, lw, ll = smp.posterior(); w = np.exp(lw - lw.max()); w /= w.sum()
     os.makedirs(OUT, exist_ok=True)
     np.savez(f"{OUT}/{tag}.npz", samples=X, weights=w, log_l=ll, param_order=np.array(names), log_z=smp.log_z,
-             n_clusters=data["N"], selection=selection, mode=mode, opt=json.dumps(OPT))
+             n_clusters=data["N"], selection=selection, mode=mode, opt=json.dumps(OPT), contam=json.dumps(CONTAM))
     print(f"{tag}: done in {(time.time() - t0) / 60:.1f} min", flush=True)
     for j, n in enumerate(names):
         o = np.argsort(X[:, j]); lo, me, hi = np.interp([.16, .5, .84], np.cumsum(w[o]), X[o, j])
@@ -369,18 +456,24 @@ if __name__ == "__main__":
                     help="joint only: run cluster bootstraps until B1-B0 have converged, starting at draw B0 "
                          "(resampling seed 7000+b, as paper 1.1); unconverged draws are skipped and replaced (at most 10 extra)")
     ap.add_argument("--timeout", type=float, default=2400.0, help="per-bootstrap sampler time limit [s]")
+    ap.add_argument("--contam", default="none", choices=["none", "fixed", "free"],
+                    help="joint only: chance-match mixture, q by purity tier fixed from the randoms or free")
+    ap.add_argument("--template-half", default="all", choices=["all", "A"], help="A: template from CID-even randoms, inject CID-odd")
+    ap.add_argument("--q-below80", type=float, default=0.85)
     ap.add_argument("--inject", type=int, nargs=2, default=None, metavar=("N_ADD", "SEED"),
                     help="joint only: add N_ADD random-pool spurious matches (seed SEED) to --subset (load_injected)")
     a = ap.parse_args()
     if a.lam_min is not None:
         OPT["lam_min"] = a.lam_min
+    CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80)
     if a.inject:
         data = load_injected(a.subset, *a.inject)
     else:
         data = load_mock(a.data) if a.data else load_real(a.subset)
     if a.mode != "joint" and data["stacks"] is None:
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
-    tag = f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" if a.inject else "") + (f"_{a.tag}" if a.tag else "")
+    tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" if a.inject else "")
+           + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") if a.contam != "none" else "") + (f"_{a.tag}" if a.tag else ""))
     if a.boot:
         if a.mode != "joint":
             raise SystemExit("--boot is for the joint fit")
