@@ -472,7 +472,7 @@ if __name__ == "__main__":
         data = load_mock(a.data) if a.data else load_real(a.subset)
     if a.mode != "joint" and data["stacks"] is None:
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
-    tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" if a.inject else "")
+    tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" + ("hB" if a.template_half == "A" else "") if a.inject else "")
            + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") if a.contam != "none" else "") + (f"_{a.tag}" if a.tag else ""))
     if a.boot:
         if a.mode != "joint":
