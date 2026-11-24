@@ -279,6 +279,46 @@ def resample(data, idx):
     return out
 
 
+def load_injected(base, n_add, seed):
+    """Contamination-injection test (2026-11-24): the real `base` subset plus n_add spurious X-ray-optical matches
+    drawn without replacement (seed) from the random pool (build_random_pool.py; measured with measure_escale.py).
+    Pool members that are the same X-ray source as a base cluster are excluded.  Each random gets the boost of the
+    full-sample stack its (z, Lx/E) falls in, as the real clusters do (load_real uses the full-sample boosts for
+    every subset).  Joint fit only (no stacks)."""
+    from cluster_toolkit.boostfactors import boost_powerlaw_at_R
+    data = load_real(base)
+    pool = Table.read(f"{D}/randoms/escale_random_pool.fits")
+    a = np.load(f"{D}/randoms/measurement/joint6.npz")
+    assert np.all(a["ids"] == np.asarray(pool["ID"]))
+    base_cid = set(np.asarray(Table.read(f"{D}/escale_des_sample.fits")["CID"])[data["keep"]].astype(int))
+    avail = np.flatnonzero(~np.isin(np.asarray(pool["CID"]).astype(int), list(base_cid)))
+    if n_add > len(avail):
+        raise SystemExit(f"only {len(avail)} randoms available")
+    pick = np.sort(np.random.default_rng(seed).choice(avail, n_add, replace=False))
+    st = pickle.load(open(f"{M}/stacks.pkl", "rb"))
+    z = np.asarray(pool["Z"], float)[pick]; llx = np.log10(np.asarray(pool["LX_EZ"], float)[pick])
+    zb = np.clip(np.searchsorted(st["z_edges"], z, side="right") - 1, 0, len(st["z_edges"]) - 2)
+    b6 = np.ones((n_add, 6))
+    for n in range(n_add):
+        ed = st["lx_edges"][zb[n]]
+        lb = int(np.clip(np.searchsorted(ed, llx[n], side="right") - 1, 0, len(ed) - 2))
+        f = st["boost_fits"][f"z{zb[n]}_lx{lb}"]
+        if not f["failed"]:
+            b6[n] = boost_powerlaw_at_R(a["radii"], f["B0"], f["Rs"], f["alpha"])
+    F, eF = np.asarray(pool["FLUX"], float)[pick], np.asarray(pool["FLUX_ERR"], float)[pick]
+    LX = np.asarray(pool["LX"], float)[pick]
+    xr = {"z": z, "flux_obs": F, "flux_err": eF, "flux_conv": LX / F, "logLx_obs": np.log10(LX)}
+    jr = dict(d=a["data_vectors"][pick] * b6, v=np.array([np.diag(c) for c in a["cov_matrices"][pick]]) * b6 ** 2,
+              n=a["n_k"][pick].astype(float), fl=a["floored"][pick])
+    out = dict(data)
+    out["x"] = {k: np.concatenate([data["x"][k], xr[k]]) for k in data["x"]}
+    out["joint"] = {k: (np.concatenate([data["joint"][k], jr[k]]) if k != "R" else data["joint"][k]) for k in data["joint"]}
+    out["stacks"], out["N"], out["n_injected"] = None, data["N"] + n_add, n_add
+    print(f"injection: base {base} N={data['N']} + {n_add} randoms (seed {seed}; {len(avail)} available) -> N={out['N']}",
+          flush=True)
+    return out
+
+
 def run(mode, selection, data, tag, timeout=None):
     if mode == "twostep" and selection == "det":
         return twostep_det(data, tag)
@@ -321,7 +361,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["joint", "forward", "twostep"])
     ap.add_argument("--selection", choices=["det", "A", "AB"], required=True)
-    ap.add_argument("--subset", default="all", choices=["all", "p95", "p90"])
+    ap.add_argument("--subset", default="all", choices=["all", "p95", "p90", "p80"])
     ap.add_argument("--data", default=None, help="mock .npz (see make_escale_mock.py); default: real data")
     ap.add_argument("--tag", default="")
     ap.add_argument("--lam-min", type=float, default=None, help="minimum AME richness of the optical stage (OPT version 2b)")
@@ -329,13 +369,18 @@ if __name__ == "__main__":
                     help="joint only: run cluster bootstraps until B1-B0 have converged, starting at draw B0 "
                          "(resampling seed 7000+b, as paper 1.1); unconverged draws are skipped and replaced (at most 10 extra)")
     ap.add_argument("--timeout", type=float, default=2400.0, help="per-bootstrap sampler time limit [s]")
+    ap.add_argument("--inject", type=int, nargs=2, default=None, metavar=("N_ADD", "SEED"),
+                    help="joint only: add N_ADD random-pool spurious matches (seed SEED) to --subset (load_injected)")
     a = ap.parse_args()
     if a.lam_min is not None:
         OPT["lam_min"] = a.lam_min
-    data = load_mock(a.data) if a.data else load_real(a.subset)
+    if a.inject:
+        data = load_injected(a.subset, *a.inject)
+    else:
+        data = load_mock(a.data) if a.data else load_real(a.subset)
     if a.mode != "joint" and data["stacks"] is None:
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
-    tag = f"{a.mode}_{a.selection}_{a.subset}" + (f"_{a.tag}" if a.tag else "")
+    tag = f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" if a.inject else "") + (f"_{a.tag}" if a.tag else "")
     if a.boot:
         if a.mode != "joint":
             raise SystemExit("--boot is for the joint fit")

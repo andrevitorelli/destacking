@@ -10,7 +10,7 @@ For every cluster (X-ray peak centre, z_splus) it stores
 Settings identical to paper 1.1 except: cosmology flat LCDM 70/0.3 (the catalogue's), and one background
 selection for all frameworks (margin z_s > 1.1 z_l + 0.2).
 
-usage: python measure_escale.py [n_workers]
+usage: [ESCALE_SAMPLE=... ESCALE_MEAS_OUT=...] python measure_escale.py [n_workers]
 writes ~/destacking_data/lx_splus_erosita_des/measurement/{stakes.pkl, joint6.npz, meta.json}
 """
 import os, sys, json, time, pickle
@@ -24,8 +24,8 @@ from destacking.data import analytic_signal, select_background
 from astropy.table import Table
 
 D = os.path.expanduser("~/destacking_data/lx_splus_erosita_des")
-OUT = f"{D}/measurement"
-SAMPLE = f"{D}/escale_des_sample.fits"
+OUT = os.environ.get("ESCALE_MEAS_OUT", f"{D}/measurement")            # env overrides: used for the random pool
+SAMPLE = os.environ.get("ESCALE_SAMPLE", f"{D}/escale_des_sample.fits")
 SRC = os.path.expanduser("~/destacking_data/real_data/metacal_filtered.npz")
 RADIUS = 5.3
 BG = dict(factor=1.1, offset=0.2)
