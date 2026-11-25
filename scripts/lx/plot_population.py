@@ -86,7 +86,19 @@ def main():
                 ax[1, i].errorbar(x + dx, q[1], yerr=[[q[1] - q[0]], [q[2] - q[1]]], fmt=mk, color=c, capsize=2, ms=7, mec="k")
                 xs.append(x + dx); ys.append(q[1])
             ax[1, i].plot(xs, ys, "-", color=c, lw=1)
-    for fl, tag, c in FREE:
+    # population model with q free in each sample (purple crosses, offset)
+    for i, pn in enumerate(pars):
+        xs, ys = [], []
+        for nm, sub, x in REAL:
+            q = quant(f"{F}/joint_AB_{sub}_contfreepop_{T}.npz", pn)
+            if q is None:
+                continue
+            ax[1, i].errorbar(x + 0.016, q[1], yerr=[[q[1] - q[0]], [q[2] - q[1]]], fmt="X", color="C4", capsize=2, ms=8, mec="k",
+                              label="halo population, q free in each sample" if (i == 0 and nm == "p95") else None)
+            xs.append(x + 0.016); ys.append(q[1])
+        ax[1, i].plot(xs, ys, "--", color="C4", lw=1)
+    FREE_ = [f for f in FREE if f[1] != "contfreepop_"]
+    for fl, tag, c in FREE_:
         for i, pn in enumerate(pars):
             q = quant(f"{F}/joint_AB_all_{tag}{T}.npz", pn)
             if q is not None:
