@@ -176,7 +176,13 @@ def mis_at(mis, so):
 # Template: boosted random-pool profiles fitted as DS_b = A_b (L_X E^-1 / 10^43.2)^s, plus a per-bin extra variance
 #   sig2_b (profile-to-profile scatter beyond measurement noise); template_half="A" uses only CID-even pool members
 #   (and injection then draws only CID-odd ones), so validation never fits the template on the injected randoms.
-CONTAM = dict(mode="none", q_below80=0.85, template_half="all", chance="template")
+CONTAM = dict(mode="none", q_below80=0.85, template_half="all", chance="template", qlx=False)
+# qlx=True (2026-11-25): q_c depends on (log L_X E^-1, z), since the randoms are fainter and at lower z than the real
+#   clusters (a flat q under-absorbs chance matches at low L_X and steepens beta).  q_c = posterior odds of a weighted
+#   logistic regression, randoms (class 1) against the sample's own members (class 0), in (log L_X E^-1, z):
+#   odds(x) = N_ch f_ch(x) / (N_sample f_sample(x)) = expected chance fraction at x.  Real data: per highest-flag tier,
+#   randoms of that tier against the sample's members of that tier.  Injected samples: CID-even randoms (never
+#   injected) weighted to n_inj (all tiers) plus tier-95 ones weighted to N_rand(95), against the whole sample.
 # chance="population" (2026-11-25): instead of one mean template, a chance match is a halo (centred NFW + two-halo
 #   term at the assigned redshift) with log M ~ N(a_ch + b_ch (log L_X E^-1 - 43.2), s_ch) on the mass grid, the three
 #   parameters fitted (maximum likelihood) on the random pool (or its CID-even half), cached in
@@ -189,6 +195,43 @@ def tier_q():
     c = json.load(open(f"{D}/randoms/contamination.json"))
     q = {int(t): v["q"] for t, v in c["tiers"].items()}
     q[0] = CONTAM["q_below80"]
+    return q
+
+
+def _logit_odds(x1, w1, x0, xe):
+    """Weighted logistic regression (intercept + linear in the columns of x), class 1 = x1 (weights w1), class 0 = x0
+    (weight 1); returns the posterior odds at xe, clipped to [1e-3, 0.95]."""
+    from scipy.optimize import minimize
+    X = np.vstack([x1, x0]); y = np.r_[np.ones(len(x1)), np.zeros(len(x0))]; w = np.r_[w1, np.ones(len(x0))]
+    mu, sd = X.mean(0), X.std(0)
+    A = np.c_[np.ones(len(X)), (X - mu) / sd]
+
+    def nll(c):
+        t = A @ c
+        return np.sum(w * (np.logaddexp(0, t) - y * t)), A.T @ (w * (1 / (1 + np.exp(-t)) - y))
+    c = minimize(nll, np.zeros(A.shape[1]), jac=True, method="BFGS").x
+    return np.clip(np.exp(np.c_[np.ones(len(xe)), (xe - mu) / sd] @ c), 1e-3, 0.95), c
+
+
+def q_lx(x, tier, n_inj):
+    """Per-cluster chance probability in (log L_X E^-1, z); see CONTAM["qlx"]."""
+    pool = Table.read(f"{D}/randoms/escale_random_pool.fits")
+    xp = np.c_[np.log10(np.asarray(pool["LX_EZ"], float)), np.asarray(pool["Z"], float)]
+    xs = np.c_[x["logLx_obs"] - np.log10(lx.efunc(x["z"])), x["z"]]
+    tp = np.asarray(pool["TIER"]); c = json.load(open(f"{D}/randoms/contamination.json"))
+    q = np.empty(len(xs))
+    if n_inj:
+        ev = np.asarray(pool["CID"]) % 2 == 0
+        n95 = c["n_random_after_cuts"]["95"]
+        x1 = np.vstack([xp[ev], xp[ev & (tp == 95)]])
+        w1 = np.r_[np.full(ev.sum(), n_inj / ev.sum()), np.full((ev & (tp == 95)).sum(), n95 / (ev & (tp == 95)).sum())]
+        q[:], coef = _logit_odds(x1, w1, xs, xs)
+        print(f"q(L_X, z): injected sample, logistic coefficients {np.round(coef, 2)}", flush=True)
+    else:
+        for t in np.unique(tier):
+            m = tier == t
+            q[m], coef = _logit_odds(xp[tp == t], np.ones((tp == t).sum()), xs[m], xs[m])
+            print(f"q(L_X, z): tier {t}, logistic coefficients {np.round(coef, 2)}, mean q {q[m].mean():.3f}", flush=True)
     return q
 
 
@@ -322,6 +365,9 @@ class Joint:
                 self.q_fixed = np.full(self.N, qa)
             else:
                 self.q_fixed = np.array([tq[int(t)] for t in self.tier])
+            if CONTAM["qlx"]:
+                self.q_fixed = q_lx(self.x, self.tier, n_inj)
+                self.q_shape = self.q_fixed / np.array([tq[int(t)] if t >= 0 else 1.0 for t in self.tier])
             print(f"contamination mixture ({CONTAM['mode']}): template from {nu} randoms, A_b = {np.round(A, 1)}, "
                   f"slope {sl:.2f}, extra sigma_b = {np.round(np.sqrt(sig2), 1)}; q by tier {dict((k, round(v, 3)) for k, v in tq.items())}"
                   + (f"; injected sample: q = {self.q_fixed[0]:.3f} for all" if n_inj else ""), flush=True)
@@ -329,8 +375,9 @@ class Joint:
     def q_of(self, p):
         if CONTAM["mode"] == "free":
             tq = tier_q()     # fall back to the random-count values for any q not passed (e.g. the timing call in run)
-            return np.select([self.tier == 95, self.tier == 90, self.tier == 80],
-                             [p.get("q95", tq[95]), p.get("q90", tq[90]), p.get("q80", tq[80])], p.get("q0", tq[0]))
+            qt = np.select([self.tier == 95, self.tier == 90, self.tier == 80],
+                           [p.get("q95", tq[95]), p.get("q90", tq[90]), p.get("q80", tq[80])], p.get("q0", tq[0]))
+            return np.clip(qt * self.q_shape, 1e-3, 0.95) if CONTAM["qlx"] else qt
         return self.q_fixed
 
     def loglike(self, p):
@@ -535,6 +582,7 @@ if __name__ == "__main__":
                     help="joint only: chance-match mixture, q by purity tier fixed from the randoms or free")
     ap.add_argument("--template-half", default="all", choices=["all", "A"], help="A: template from CID-even randoms, inject CID-odd")
     ap.add_argument("--q-below80", type=float, default=0.85)
+    ap.add_argument("--q-lx", action="store_true", help="q per cluster from (L_X, z) (logistic regression on the randoms)")
     ap.add_argument("--chance", default="template", choices=["template", "population"],
                     help="chance-match lensing model: mean template, or halo population fitted on the randoms")
     ap.add_argument("--inject", type=int, nargs=2, default=None, metavar=("N_ADD", "SEED"),
@@ -542,7 +590,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.lam_min is not None:
         OPT["lam_min"] = a.lam_min
-    CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance)
+    CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance, qlx=a.q_lx)
     if a.inject:
         data = load_injected(a.subset, *a.inject)
     else:
@@ -550,7 +598,7 @@ if __name__ == "__main__":
     if a.mode != "joint" and data["stacks"] is None:
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
     tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" + ("hB" if a.template_half == "A" else "") if a.inject else "")
-           + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "")
+           + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "") + ("qlx" if a.q_lx else "")
               if a.contam != "none" else "") + (f"_{a.tag}" if a.tag else ""))
     if a.boot:
         if a.mode != "joint":
