@@ -255,7 +255,9 @@ class Joint:
 
     def q_of(self, p):
         if CONTAM["mode"] == "free":
-            return np.select([self.tier == 95, self.tier == 90, self.tier == 80], [p["q95"], p["q90"], p["q80"]], p.get("q0", 1.0))
+            tq = tier_q()     # fall back to the random-count values for any q not passed (e.g. the timing call in run)
+            return np.select([self.tier == 95, self.tier == 90, self.tier == 80],
+                             [p.get("q95", tq[95]), p.get("q90", tq[90]), p.get("q80", tq[80])], p.get("q0", tq[0]))
         return self.q_fixed
 
     def loglike(self, p):
