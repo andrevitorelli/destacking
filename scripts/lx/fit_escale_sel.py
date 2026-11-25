@@ -176,7 +176,11 @@ def mis_at(mis, so):
 # Template: boosted random-pool profiles fitted as DS_b = A_b (L_X E^-1 / 10^43.2)^s, plus a per-bin extra variance
 #   sig2_b (profile-to-profile scatter beyond measurement noise); template_half="A" uses only CID-even pool members
 #   (and injection then draws only CID-odd ones), so validation never fits the template on the injected randoms.
-CONTAM = dict(mode="none", q_below80=0.85, template_half="all")
+CONTAM = dict(mode="none", q_below80=0.85, template_half="all", chance="template")
+# chance="population" (2026-11-25): instead of one mean template, a chance match is a halo (centred NFW + two-halo
+#   term at the assigned redshift) with log M ~ N(a_ch + b_ch (log L_X E^-1 - 43.2), s_ch) on the mass grid, the three
+#   parameters fitted (maximum likelihood) on the random pool (or its CID-even half), cached in
+#   randoms/chance_population_<half>.json.  Each chance match then has a realistic spread of possible signals.
 
 
 def tier_q():
@@ -214,6 +218,65 @@ def chance_template(half="all"):
     return A, sl, sig2, int(use.sum())
 
 
+def _bin_ll(d0, v0, n, sh, ga, ds):
+    """Per-cluster, per-mass log-likelihood (N,K) for model profiles ds (N,K,B), as in Joint.loglike."""
+    q = (d0[:, None, :] - ds) ** 2 / v0[:, None, :]
+    return (-0.5 * np.where(sh[:, None, :], n[:, None, :] * np.log1p(q / np.maximum(n[:, None, :] - 1, 1)), 0).sum(-1)
+            - 0.5 * np.where(ga[:, None, :], q, 0).sum(-1))
+
+
+def _lognormal_grid(mu, s):
+    w = np.exp(-0.5 * ((GRID[None, :] - mu[:, None]) / s) ** 2)
+    return w / w.sum(1, keepdims=True)
+
+
+def chance_population(half="all"):
+    """Fit (a_ch, b_ch, s_ch) of the chance-match mass distribution on the random pool (cached)."""
+    cache = f"{D}/randoms/chance_population_{half}.json"
+    if os.path.exists(cache):
+        return json.load(open(cache))
+    from cluster_toolkit.boostfactors import boost_powerlaw_at_R
+    from scipy.optimize import minimize
+    pool = Table.read(f"{D}/randoms/escale_random_pool.fits"); a = np.load(f"{D}/randoms/measurement/joint6.npz")
+    use = np.ones(len(pool), bool) if half == "all" else (np.asarray(pool["CID"]) % 2 == 0)
+    st = pickle.load(open(f"{M}/stacks.pkl", "rb"))
+    z = np.asarray(pool["Z"], float); llx = np.log10(np.asarray(pool["LX_EZ"], float))
+    b6 = np.ones((len(pool), 6))
+    for k in range(len(pool)):
+        zb = int(np.clip(np.searchsorted(st["z_edges"], z[k], side="right") - 1, 0, len(st["z_edges"]) - 2))
+        ed = st["lx_edges"][zb]; lb = int(np.clip(np.searchsorted(ed, llx[k], side="right") - 1, 0, len(ed) - 2))
+        f = st["boost_fits"][f"z{zb}_lx{lb}"]
+        if not f["failed"]:
+            b6[k] = boost_powerlaw_at_R(a["radii"], f["B0"], f["Rs"], f["alpha"])
+    d = (a["data_vectors"] * b6)[use]; v = (np.array([np.diag(c) for c in a["cov_matrices"]]) * b6 ** 2)[use]
+    n = a["n_k"][use].astype(float); fl = a["floored"][use]; z, x = z[use], (llx - 43.2)[use]
+    ok = np.isfinite(d) & np.isfinite(v) & (v > 0); sh = ok & ~fl & (n >= 2); ga = ok & ~sh
+    cen, _, th = profile_tables(z, a["radii"], True)
+    ll = _bin_ll(np.where(ok, d, 0), np.where(ok, v, 1), n, sh, ga, cen + th)          # (N,K), fixed
+    def nll(t):
+        if t[2] <= 0.05:
+            return 1e30
+        w = _lognormal_grid(t[0] + t[1] * x, t[2])
+        A = np.log(np.clip(w, 1e-300, None)) + ll; mx = A.max(1, keepdims=True)
+        return -float(np.sum(mx[:, 0] + np.log(np.exp(A - mx).sum(1))))
+    best = None
+    for t0 in ([13.5, 0.5, 0.5], [13.0, 1.0, 1.0], [14.0, 0.3, 0.3], [12.5, 0.5, 1.5]):
+        r = minimize(nll, t0, method="Nelder-Mead", options=dict(xatol=1e-3, fatol=1e-3, maxiter=4000))
+        if best is None or r.fun < best.fun:
+            best = r
+    # curvature errors (finite differences) for reporting
+    h = np.array([0.02, 0.02, 0.02]); H = np.zeros((3, 3)); t = best.x
+    for i in range(3):
+        for j in range(3):
+            ei, ej = np.eye(3)[i] * h[i], np.eye(3)[j] * h[j]
+            H[i, j] = (nll(t + ei + ej) - nll(t + ei - ej) - nll(t - ei + ej) + nll(t - ei - ej)) / (4 * h[i] * h[j])
+    err = np.sqrt(np.clip(np.diag(np.linalg.pinv(H)), 0, None))
+    out = dict(a_ch=float(t[0]), b_ch=float(t[1]), s_ch=float(t[2]), err=err.tolist(), n_used=int(use.sum()),
+               nll=float(best.fun), half=half)
+    json.dump(out, open(cache, "w"), indent=1)
+    return out
+
+
 # ── likelihoods ──────────────────────────────────────────────────────────────
 class Joint:
     def __init__(self, data, selection):
@@ -232,14 +295,24 @@ class Joint:
         self.N = len(self.x["z"])
         self.contam = CONTAM["mode"] != "none" and not self.det
         if self.contam:
-            A, sl, sig2, nu = chance_template(CONTAM["template_half"])
             llx = self.x["logLx_obs"] - np.log10(lx.efunc(self.x["z"])) - 43.2
-            ds_c = A[None, :] * 10 ** (sl * llx)[:, None]
-            vv = self.v0 + sig2[None, :]
-            qq = (self.d0 - ds_c) ** 2 / vv
-            # Gaussian bins carry the variance-ratio term, since the template's extra variance changes the normalisation
-            self.ll_chance = (-0.5 * np.where(self.sh, self.n * np.log1p(qq / np.maximum(self.n - 1, 1)), 0).sum(-1)
-                              - 0.5 * np.where(self.ga, qq + np.log(vv / self.v0), 0).sum(-1))
+            if CONTAM["chance"] == "population":
+                cp = chance_population(CONTAM["template_half"])
+                wch = _lognormal_grid(cp["a_ch"] + cp["b_ch"] * llx, cp["s_ch"])
+                Ach = np.log(np.clip(wch, 1e-300, None)) + _bin_ll(self.d0, self.v0, self.n, self.sh, self.ga, self.cen + self.th)
+                mx = Ach.max(1, keepdims=True)
+                self.ll_chance = mx[:, 0] + np.log(np.exp(Ach - mx).sum(1))
+                A, sl, sig2, nu = np.zeros(6), 0.0, np.zeros(6), cp["n_used"]
+                print(f"chance population: log M = {cp['a_ch']:.2f} + {cp['b_ch']:.2f} (log L/E - 43.2), scatter {cp['s_ch']:.2f} dex "
+                      f"(errors {np.round(cp['err'], 2)}; from {cp['n_used']} randoms)", flush=True)
+            else:
+                A, sl, sig2, nu = chance_template(CONTAM["template_half"])
+                ds_c = A[None, :] * 10 ** (sl * llx)[:, None]
+                vv = self.v0 + sig2[None, :]
+                qq = (self.d0 - ds_c) ** 2 / vv
+                # Gaussian bins carry the variance-ratio term, since the template's extra variance changes the normalisation
+                self.ll_chance = (-0.5 * np.where(self.sh, self.n * np.log1p(qq / np.maximum(self.n - 1, 1)), 0).sum(-1)
+                                  - 0.5 * np.where(self.ga, qq + np.log(vv / self.v0), 0).sum(-1))
             self.tier = np.asarray(self.x["tier"])
             tq = tier_q()
             n_inj = int((self.tier == -1).sum())
@@ -462,12 +535,14 @@ if __name__ == "__main__":
                     help="joint only: chance-match mixture, q by purity tier fixed from the randoms or free")
     ap.add_argument("--template-half", default="all", choices=["all", "A"], help="A: template from CID-even randoms, inject CID-odd")
     ap.add_argument("--q-below80", type=float, default=0.85)
+    ap.add_argument("--chance", default="template", choices=["template", "population"],
+                    help="chance-match lensing model: mean template, or halo population fitted on the randoms")
     ap.add_argument("--inject", type=int, nargs=2, default=None, metavar=("N_ADD", "SEED"),
                     help="joint only: add N_ADD random-pool spurious matches (seed SEED) to --subset (load_injected)")
     a = ap.parse_args()
     if a.lam_min is not None:
         OPT["lam_min"] = a.lam_min
-    CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80)
+    CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance)
     if a.inject:
         data = load_injected(a.subset, *a.inject)
     else:
@@ -475,7 +550,8 @@ if __name__ == "__main__":
     if a.mode != "joint" and data["stacks"] is None:
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
     tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" + ("hB" if a.template_half == "A" else "") if a.inject else "")
-           + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") if a.contam != "none" else "") + (f"_{a.tag}" if a.tag else ""))
+           + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "")
+              if a.contam != "none" else "") + (f"_{a.tag}" if a.tag else ""))
     if a.boot:
         if a.mode != "joint":
             raise SystemExit("--boot is for the joint fit")
