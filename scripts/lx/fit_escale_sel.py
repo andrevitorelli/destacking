@@ -176,7 +176,8 @@ def mis_at(mis, so):
 # Template: boosted random-pool profiles fitted as DS_b = A_b (L_X E^-1 / 10^43.2)^s, plus a per-bin extra variance
 #   sig2_b (profile-to-profile scatter beyond measurement noise); template_half="A" uses only CID-even pool members
 #   (and injection then draws only CID-odd ones), so validation never fits the template on the injected randoms.
-CONTAM = dict(mode="none", q_below80=0.85, template_half="all", chance="template", qlx=False)
+CONTAM = dict(mode="none", q_below80=0.85, template_half="all", chance="template", qlx=False, qflat=None)
+# qflat (2026-11-25 diagnostic): the same q for every member (e.g. p95 alone at the q of p95 + 289 injected).
 # qlx=True (2026-11-25): q_c depends on (log L_X E^-1, z), since the randoms are fainter and at lower z than the real
 #   clusters (a flat q under-absorbs chance matches at low L_X and steepens beta).  q_c = posterior odds of a weighted
 #   logistic regression, randoms (class 1) against the sample's own members (class 0), in (log L_X E^-1, z):
@@ -365,6 +366,8 @@ class Joint:
                 self.q_fixed = np.full(self.N, qa)
             else:
                 self.q_fixed = np.array([tq[int(t)] for t in self.tier])
+            if CONTAM["qflat"] is not None:
+                self.q_fixed = np.full(self.N, CONTAM["qflat"])
             if CONTAM["qlx"]:
                 self.q_fixed = q_lx(self.x, self.tier, n_inj)
                 self.q_shape = self.q_fixed / np.array([tq[int(t)] if t >= 0 else 1.0 for t in self.tier])
@@ -582,6 +585,7 @@ if __name__ == "__main__":
                     help="joint only: chance-match mixture, q by purity tier fixed from the randoms or free")
     ap.add_argument("--template-half", default="all", choices=["all", "A"], help="A: template from CID-even randoms, inject CID-odd")
     ap.add_argument("--q-below80", type=float, default=0.85)
+    ap.add_argument("--q-flat", type=float, default=None, help="diagnostic: the same fixed q for every member")
     ap.add_argument("--q-lx", action="store_true", help="q per cluster from (L_X, z) (logistic regression on the randoms)")
     ap.add_argument("--chance", default="template", choices=["template", "population"],
                     help="chance-match lensing model: mean template, or halo population fitted on the randoms")
@@ -590,7 +594,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.lam_min is not None:
         OPT["lam_min"] = a.lam_min
-    CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance, qlx=a.q_lx)
+    CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance, qlx=a.q_lx, qflat=a.q_flat)
     if a.inject:
         data = load_injected(a.subset, *a.inject)
     else:
@@ -598,7 +602,7 @@ if __name__ == "__main__":
     if a.mode != "joint" and data["stacks"] is None:
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
     tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" + ("hB" if a.template_half == "A" else "") if a.inject else "")
-           + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "") + ("qlx" if a.q_lx else "")
+           + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "") + ("qlx" if a.q_lx else "") + (f"q{a.q_flat:g}" if a.q_flat is not None else "")
               if a.contam != "none" else "") + (f"_{a.tag}" if a.tag else ""))
     if a.boot:
         if a.mode != "joint":
