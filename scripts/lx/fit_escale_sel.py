@@ -180,7 +180,10 @@ def mis_at(mis, so):
 # Template: boosted random-pool profiles fitted as DS_b = A_b (L_X E^-1 / 10^43.2)^s, plus a per-bin extra variance
 #   sig2_b (profile-to-profile scatter beyond measurement noise); template_half="A" uses only CID-even pool members
 #   (and injection then draws only CID-odd ones), so validation never fits the template on the injected randoms.
-CONTAM = dict(mode="none", q_below80=0.85, template_half="all", chance="template", qlx=False, qflat=None)
+CONTAM = dict(mode="none", q_below80=0.85, template_half="all", chance="template", qlx=False, qflat=None, chance_mis=False)
+# chance_mis (2026-11-26, forward only): the mean chance-match profile gets the same miscentring (f_mis, sigma_off) as
+#   the genuine model; the centred population over-predicts the random pool's mean signal in the innermost bin
+#   (0.25 Mpc: 56 against 31 +- 7.5 M_sun/pc^2) while matching it from 0.44 Mpc out.
 # qflat (2026-11-25 diagnostic): the same q for every member (e.g. p95 alone at the q of p95 + 289 injected).
 # qlx=True (2026-11-25): q_c depends on (log L_X E^-1, z), since the randoms are fainter and at lower z than the real
 #   clusters (a flat q under-absorbs chance matches at low L_X and steepens beta).  q_c = posterior odds of a weighted
@@ -438,6 +441,7 @@ class Forward:
             cp = chance_population(CONTAM["template_half"])
             llx = self.x["logLx_obs"] - np.log10(lx.efunc(self.x["z"])) - 43.2
             wch = _lognormal_grid(cp["a_ch"] + cp["b_ch"] * llx, cp["s_ch"])
+            self.wch = wch
             self.ds_ch = np.einsum("nk,nkb->nb", wch, self.cen + self.th)                                  # (N,B)
             tq = tier_q()
             self.q = np.array([tq[int(t)] for t in np.asarray(self.x["tier"])])
@@ -457,7 +461,8 @@ class Forward:
             ds = (1 - p["f_mis"]) * self.cen + p["f_mis"] * mis_at(self.mis, p["sigma_off"]) + self.th
             dsw = np.einsum("nk,nkb->nb", w, ds)                                                      # (N,B)
             if self.contam:
-                dsw = (1 - self.q)[:, None] * dsw + self.q[:, None] * self.ds_ch
+                ds_ch = np.einsum("nk,nkb->nb", self.wch, ds) if CONTAM["chance_mis"] else self.ds_ch
+                dsw = (1 - self.q)[:, None] * dsw + self.q[:, None] * ds_ch
         ll = 0.0
         for s in self.st:
             r = s["rows"]; mod = (self.K[r] * dsw[r]).sum(0) / self.K[r].sum(0)
@@ -612,6 +617,7 @@ if __name__ == "__main__":
     ap.add_argument("--template-half", default="all", choices=["all", "A"], help="A: template from CID-even randoms, inject CID-odd")
     ap.add_argument("--q-below80", type=float, default=0.85)
     ap.add_argument("--q-flat", type=float, default=None, help="diagnostic: the same fixed q for every member")
+    ap.add_argument("--chance-mis", action="store_true", help="forward dilution: chance profile miscentred like genuine clusters")
     ap.add_argument("--q-lx", action="store_true", help="q per cluster from (L_X, z) (logistic regression on the randoms)")
     ap.add_argument("--chance", default="template", choices=["template", "population"],
                     help="chance-match lensing model: mean template, or halo population fitted on the randoms")
@@ -620,7 +626,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.lam_min is not None:
         OPT["lam_min"] = a.lam_min
-    CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance, qlx=a.q_lx, qflat=a.q_flat)
+    CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance, qlx=a.q_lx, qflat=a.q_flat, chance_mis=a.chance_mis)
     if a.inject:
         data = load_injected(a.subset, *a.inject)
     else:
@@ -628,7 +634,7 @@ if __name__ == "__main__":
     if a.mode != "joint" and data["stacks"] is None:
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
     tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" + ("hB" if a.template_half == "A" else "") if a.inject else "")
-           + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "") + ("qlx" if a.q_lx else "") + (f"q{a.q_flat:g}" if a.q_flat is not None else "")
+           + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "") + ("qlx" if a.q_lx else "") + (f"q{a.q_flat:g}" if a.q_flat is not None else "") + ("mis" if a.chance_mis else "")
               if a.contam != "none" else "") + (f"_{a.tag}" if a.tag else ""))
     if a.boot:
         if a.mode != "joint":
