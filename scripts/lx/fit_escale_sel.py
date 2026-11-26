@@ -627,6 +627,8 @@ if __name__ == "__main__":
     ap.add_argument("--chance-mis", action="store_true", help="forward dilution: chance profile miscentred like genuine clusters")
     ap.add_argument("--stacks", default="", help="stack layout tag (measurement/subset_<subset>_<TAG>, from build_escale_stacks.py --out-tag)")
     ap.add_argument("--min-n", type=int, default=50, help="forward: smallest stack used")
+    ap.add_argument("--gauss-prior", nargs="*", default=[], metavar="NAME=MU,SIGMA",
+                    help="Gaussian prior instead of the flat one, e.g. gamma=0,0.79 (Pederneiras+25)")
     ap.add_argument("--fix", nargs="*", default=[], metavar="NAME=VALUE", help="fix parameters (diagnostics)")
     ap.add_argument("--q-lx", action="store_true", help="q per cluster from (L_X, z) (logistic regression on the randoms)")
     ap.add_argument("--chance", default="template", choices=["template", "population"],
@@ -638,6 +640,10 @@ if __name__ == "__main__":
         OPT["lam_min"] = a.lam_min
     FIX.update({k: float(v) for k, v in (x.split("=") for x in a.fix)})
     STACKS.update(tag=a.stacks, min_n=a.min_n)
+    GP = {}
+    for x in a.gauss_prior:
+        k, v = x.split("="); mu, sg = map(float, v.split(","))
+        PRI[k] = stats.norm(mu, sg); GP[k] = (mu, sg)
     CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance, qlx=a.q_lx, qflat=a.q_flat, chance_mis=a.chance_mis)
     if a.inject:
         data = load_injected(a.subset, *a.inject)
@@ -647,7 +653,7 @@ if __name__ == "__main__":
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
     tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" + ("hB" if a.template_half == "A" else "") if a.inject else "")
            + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "") + ("qlx" if a.q_lx else "") + (f"q{a.q_flat:g}" if a.q_flat is not None else "") + ("mis" if a.chance_mis else "")
-              if a.contam != "none" else "") + "".join(f"_fix{k}{v:g}" for k, v in sorted(FIX.items())) + (f"_st{a.stacks}" if a.stacks else "")
+              if a.contam != "none" else "") + "".join(f"_fix{k}{v:g}" for k, v in sorted(FIX.items())) + "".join(f"_gp{k}{m:g}_{g:g}" for k, (m, g) in sorted(GP.items())) + (f"_st{a.stacks}" if a.stacks else "")
            + (f"_minn{a.min_n}" if a.min_n != 50 else "") + (f"_{a.tag}" if a.tag else ""))
     if a.boot:
         if a.mode != "joint":
