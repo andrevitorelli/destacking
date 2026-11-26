@@ -97,7 +97,11 @@ def load_real(subset):
     row = {int(c): k for k, c in enumerate(raw["CID6722"])}
     ix = np.array([row[int(c)] for c in cat["CID"]])
     F, eF = np.asarray(raw["Flux0623"], float)[ix], np.asarray(raw["eFlux0623"], float)[ix]
-    keep = np.ones(len(cat), bool) if subset == "all" else np.asarray(cat[subset.upper()], bool)
+    if subset in ("t90", "t80"):     # disjoint highest-flag tiers (2026-11-26): P90 not P95; P80 only
+        P = {k: np.asarray(cat[k], bool) for k in ("P95", "P90", "P80")}
+        keep = (P["P90"] & ~P["P95"]) if subset == "t90" else (P["P80"] & ~P["P90"] & ~P["P95"])
+    else:
+        keep = np.ones(len(cat), bool) if subset == "all" else np.asarray(cat[subset.upper()], bool)
     a = np.load(f"{M}/joint6.npz"); b = np.load(f"{M}/boosts.npz")
     xdata = {"z": np.asarray(cat["Z"], float), "flux_obs": F, "flux_err": eF,
              "flux_conv": np.asarray(cat["LX"], float) / F, "logLx_obs": np.log10(np.asarray(cat["LX"], float))}
@@ -573,7 +577,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["joint", "forward", "twostep"])
     ap.add_argument("--selection", choices=["det", "A", "AB"], required=True)
-    ap.add_argument("--subset", default="all", choices=["all", "p95", "p90", "p80"])
+    ap.add_argument("--subset", default="all", choices=["all", "p95", "p90", "p80", "t90", "t80"],
+                    help="t90 / t80: disjoint highest-flag tiers (P90 not P95; P80 only); p95 is the 95 tier")
     ap.add_argument("--data", default=None, help="mock .npz (see make_escale_mock.py); default: real data")
     ap.add_argument("--tag", default="")
     ap.add_argument("--lam-min", type=float, default=None, help="minimum AME richness of the optical stage (OPT version 2b)")
