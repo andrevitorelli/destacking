@@ -597,7 +597,7 @@ def run(mode, selection, data, tag, timeout=None):
         print(f"  {n:10s} {me:+.3f} +{hi - me:.3f}/-{me - lo:.3f}", flush=True)
     # weight at the grid edges for the posterior median (sanity: the grid must contain the prior)
     pm = {n: float(np.interp(0.5, np.cumsum(w[np.argsort(X[:, j])]), np.sort(X[:, j]))) for j, n in enumerate(names)}
-    pm.setdefault("f_mis", 0.0); pm.setdefault("sigma_off", 0.1)
+    pm.update(FIX); pm.setdefault("f_mis", 0.0); pm.setdefault("sigma_off", 0.1)
     if selection == "det":
         return
     ww = weights(L.mp, L.x, pm)
