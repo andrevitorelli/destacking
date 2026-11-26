@@ -36,6 +36,12 @@ def quant(path, name):
     return np.interp([.16, .5, .84], np.cumsum(w[o]), x[o])
 
 
+def boot_meds(prefix, name):
+    """Medians of each cluster-bootstrap posterior (files <prefix>_b<NNN>.npz), or None if fewer than 10."""
+    fs = [f for f in glob.glob(f"{prefix}_b*.npz") if re.fullmatch(r"_b\d+\.npz", f[len(prefix):])]
+    return np.array([quant(f, name)[1] for f in fs]) if len(fs) >= 10 else None
+
+
 def wline(x, y, s):
     """Weighted straight line y = a + b x; returns (a, b), covariance, chi2."""
     A = np.c_[np.ones(len(x)), x] / s[:, None]
@@ -63,15 +69,31 @@ def main():
     xx = np.linspace(0, 0.8, 50)
     for i, (pn, pl) in enumerate(PARS):
         # tiers
-        q = np.array([quant(f"{F}/joint_AB_{s}_{T}.npz", pn) for _, s, _ in tiers])
-        x = np.array([f for *_, f in tiers]); y = q[:, 1]; s = (q[:, 2] - q[:, 0]) / 2
-        p, C, chi2 = wline(x, y, s)
+        x = np.array([f for *_, f in tiers])
+        bm = [boot_meds(f"{F}/joint_AB_{s}_{T}", pn) for _, s, _ in tiers]
+        if all(b is not None for b in bm):     # bootstrap: median of medians, 16-84% spread; f = 0 value from random triples
+            q = np.array([np.percentile(b, [16, 50, 84]) for b in bm])
+            y = q[:, 1]; s = (q[:, 2] - q[:, 0]) / 2
+            p, C, chi2 = wline(x, y, s)
+            rng = np.random.default_rng(1)
+            tri = np.array([[b[rng.integers(len(b))] for b in bm] for _ in range(20000)])
+            A = np.c_[np.ones(3), x] / s[:, None]
+            P = (np.linalg.inv(A.T @ A) @ A.T @ (tri / s).T).T
+            t0 = np.percentile(P[:, 0], [16, 50, 84]); t1 = np.percentile(P[:, 1], [16, 50, 84])
+            kind = "bootstrap"
+        else:
+            q = np.array([quant(f"{F}/joint_AB_{s}_{T}.npz", pn) for _, s, _ in tiers])
+            y = q[:, 1]; s = (q[:, 2] - q[:, 0]) / 2
+            p, C, chi2 = wline(x, y, s)
+            t0 = np.array([p[0] - np.sqrt(C[0, 0]), p[0], p[0] + np.sqrt(C[0, 0])])
+            t1 = np.array([p[1] - np.sqrt(C[1, 1]), p[1], p[1] + np.sqrt(C[1, 1])])
+            kind = "single fits"
         ax[i].errorbar(x, y, yerr=[y - q[:, 0], q[:, 2] - y], fmt="o", color="C0", ms=8, mec="k", capsize=3,
-                       label="disjoint tiers (independent)" if i == 0 else None, zorder=5)
+                       label="disjoint tiers (independent; bootstrap median and 16–84%)" if i == 0 else None, zorder=5)
         band = np.sqrt(C[0, 0] + 2 * xx * C[0, 1] + xx ** 2 * C[1, 1])
         ax[i].plot(xx, p[0] + p[1] * xx, "-", color="C0")
         ax[i].fill_between(xx, p[0] + p[1] * xx - band, p[0] + p[1] * xx + band, color="C0", alpha=0.15)
-        ax[i].errorbar(0, p[0], yerr=np.sqrt(C[0, 0]), fmt="*", color="C3", ms=14, mec="k", capsize=3, zorder=6,
+        ax[i].errorbar(0, t0[1], yerr=[[t0[1] - t0[0]], [t0[2] - t0[1]]], fmt="*", color="C3", ms=14, mec="k", capsize=3, zorder=6,
                        label="extrapolated to f = 0" if i == 0 else None)
         # overlapping samples
         qo = np.array([quant(f"{F}/joint_AB_{s}_{T}.npz", pn) for _, s, _ in over])
@@ -94,7 +116,7 @@ def main():
         ax[i].set_xlabel("expected fraction of spurious matches f")
         ax[i].set_ylabel(pl)
         ax[i].set_xlim(-0.03, 0.8)
-        rows.append(f"| {pn} | {p[0]:+.2f} ± {np.sqrt(C[0, 0]):.2f} | {p[1]:+.2f} ± {np.sqrt(C[1, 1]):.2f} | {chi2:.2f} | "
+        rows.append(f"| {pn} | {t0[1]:+.2f} +{t0[2] - t0[1]:.2f} −{t0[1] - t0[0]:.2f} | {t1[1]:+.2f} +{t1[2] - t1[1]:.2f} −{t1[1] - t1[0]:.2f} | {chi2:.2f} | "
                     f"{po[0]:+.2f} ± {np.sqrt(Co[0, 0]):.2f} (too small: correlated) | {sl_inj} |")
     ax[0].axhspan(0.96, 1.26, color="k", alpha=0.07, label="Pederneiras+25 eRASS1")
     ax[1].axhspan(-0.79, 0.79, color="k", alpha=0.07)
@@ -102,14 +124,19 @@ def main():
     fig.legend(h, l, loc="lower center", ncol=6, fontsize=8, frameon=False)
     N = {s: int(np.load(f"{F}/joint_AB_{s}_{T}.npz")["n_clusters"]) for _, s, _ in tiers}
     fig.suptitle("Extrapolation to zero contamination from the purity tiers (joint A+B, λ_min = 5, no mixture; "
-                 f"N = {N['p95']} / {N['t90']} / {N['t80']}; single fits)", fontsize=11)
+                 f"N = {N['p95']} / {N['t90']} / {N['t80']}; tiers: 50 cluster bootstraps each)", fontsize=11)
     fig.tight_layout(rect=(0, 0.07, 1, 1))
     os.makedirs(a.out, exist_ok=True)
     fig.savefig(f"{a.out}/lxm_2026-11-26_extrapolation.png", dpi=150)
     print("\n".join(rows))
     print("tiers f:", {s: round(f, 3) for _, s, f in tiers}, "N:", N)
     for nm, s_, f in tiers:
-        print(nm, " ".join(f"{pn} {quant(f'{F}/joint_AB_{s_}_{T}.npz', pn)[1]:+.2f}" for pn, _ in PARS))
+        out = []
+        for pn, _ in PARS:
+            b = boot_meds(f"{F}/joint_AB_{s_}_{T}", pn)
+            v = np.percentile(b, [16, 50, 84]) if b is not None else quant(f"{F}/joint_AB_{s_}_{T}.npz", pn)
+            out.append(f"{pn} {v[1]:+.2f} +{v[2] - v[1]:.2f} −{v[1] - v[0]:.2f}")
+        print(nm, f"({'bootstrap, ' + str(len(b)) if b is not None else 'single fit'})", " | ".join(out))
 
 
 if __name__ == "__main__":
