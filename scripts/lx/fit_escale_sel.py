@@ -56,6 +56,7 @@ PRI = {"alpha": stats.uniform(-2, 4), "beta": stats.uniform(0.3, 2.7), "gamma": 
        "sig_int": stats.uniform(0.02, 0.98), "f_mis": stats.uniform(0, 1), "sigma_off": stats.uniform(0.01, 0.99),
        "q95": stats.uniform(0, 1), "q90": stats.uniform(0, 1), "q80": stats.uniform(0, 1), "q0": stats.uniform(0, 1)}
 NPOOL = int(os.environ.get("NPOOL", "15"))
+FIX = {}     # --fix NAME=VALUE (2026-11-26 diagnostics)
 
 
 # ── selection model ──────────────────────────────────────────────────────────
@@ -565,7 +566,11 @@ def run(mode, selection, data, tag, timeout=None):
     if mode == "joint" and CONTAM["mode"] == "free":
         tiers = set(np.asarray(data["x"]["tier"]).tolist())
         names += [f"q{t}" for t in (95, 90, 80, 0) if t in tiers]
+    names = [n for n in names if n not in FIX]
     L = {"joint": Joint, "forward": Forward, "twostep": TwoStep}[mode](data, selection)
+    if FIX:     # fixed parameters (--fix NAME=VALUE), merged into every likelihood call
+        _ll = L.loglike
+        L.loglike = lambda p: _ll({**p, **FIX})
     from nautilus import Prior, Sampler
     pr = Prior()
     for n in names:
@@ -618,6 +623,7 @@ if __name__ == "__main__":
     ap.add_argument("--q-below80", type=float, default=0.85)
     ap.add_argument("--q-flat", type=float, default=None, help="diagnostic: the same fixed q for every member")
     ap.add_argument("--chance-mis", action="store_true", help="forward dilution: chance profile miscentred like genuine clusters")
+    ap.add_argument("--fix", nargs="*", default=[], metavar="NAME=VALUE", help="fix parameters (diagnostics)")
     ap.add_argument("--q-lx", action="store_true", help="q per cluster from (L_X, z) (logistic regression on the randoms)")
     ap.add_argument("--chance", default="template", choices=["template", "population"],
                     help="chance-match lensing model: mean template, or halo population fitted on the randoms")
@@ -626,6 +632,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.lam_min is not None:
         OPT["lam_min"] = a.lam_min
+    FIX.update({k: float(v) for k, v in (x.split("=") for x in a.fix)})
     CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance, qlx=a.q_lx, qflat=a.q_flat, chance_mis=a.chance_mis)
     if a.inject:
         data = load_injected(a.subset, *a.inject)
@@ -635,7 +642,7 @@ if __name__ == "__main__":
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
     tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" + ("hB" if a.template_half == "A" else "") if a.inject else "")
            + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "") + ("qlx" if a.q_lx else "") + (f"q{a.q_flat:g}" if a.q_flat is not None else "") + ("mis" if a.chance_mis else "")
-              if a.contam != "none" else "") + (f"_{a.tag}" if a.tag else ""))
+              if a.contam != "none" else "") + "".join(f"_fix{k}{v:g}" for k, v in sorted(FIX.items())) + (f"_{a.tag}" if a.tag else ""))
     if a.boot:
         if a.mode != "joint":
             raise SystemExit("--boot is for the joint fit")
