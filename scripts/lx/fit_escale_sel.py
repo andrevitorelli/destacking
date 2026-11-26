@@ -57,6 +57,7 @@ PRI = {"alpha": stats.uniform(-2, 4), "beta": stats.uniform(0.3, 2.7), "gamma": 
        "q95": stats.uniform(0, 1), "q90": stats.uniform(0, 1), "q80": stats.uniform(0, 1), "q0": stats.uniform(0, 1)}
 NPOOL = int(os.environ.get("NPOOL", "15"))
 FIX = {}     # --fix NAME=VALUE (2026-11-26 diagnostics)
+STACKS = dict(tag="", min_n=50)     # --stacks TAG: measurement/subset_<subset>_<TAG>; --min-n: smallest stack used (forward)
 
 
 # ── selection model ──────────────────────────────────────────────────────────
@@ -108,7 +109,7 @@ def load_real(subset):
              "flux_conv": np.asarray(cat["LX"], float) / F, "logLx_obs": np.log10(np.asarray(cat["LX"], float))}
     joint = dict(d=a["data_vectors"] * b["boost6"], v=np.array([np.diag(c) for c in a["cov_matrices"]]) * b["boost6"] ** 2,
                  n=a["n_k"].astype(float), fl=a["floored"], R=a["radii"])
-    sd = M if subset == "all" else f"{M}/subset_{subset}"
+    sd = (M if subset == "all" else f"{M}/subset_{subset}") + (f"_{STACKS['tag']}" if STACKS["tag"] else "")
     stacks, K16, R16 = None, None, None
     if os.path.exists(f"{sd}/stacks.pkl"):
         st = pickle.load(open(f"{sd}/stacks.pkl", "rb")); W = np.load(f"{sd}/weights.npz")
@@ -567,7 +568,8 @@ def run(mode, selection, data, tag, timeout=None):
         tiers = set(np.asarray(data["x"]["tier"]).tolist())
         names += [f"q{t}" for t in (95, 90, 80, 0) if t in tiers]
     names = [n for n in names if n not in FIX]
-    L = {"joint": Joint, "forward": Forward, "twostep": TwoStep}[mode](data, selection)
+    L = (Forward(data, selection, min_n=STACKS["min_n"]) if mode == "forward"
+         else {"joint": Joint, "twostep": TwoStep}[mode](data, selection))
     if FIX:     # fixed parameters (--fix NAME=VALUE), merged into every likelihood call
         _ll = L.loglike
         L.loglike = lambda p: _ll({**p, **FIX})
@@ -623,6 +625,8 @@ if __name__ == "__main__":
     ap.add_argument("--q-below80", type=float, default=0.85)
     ap.add_argument("--q-flat", type=float, default=None, help="diagnostic: the same fixed q for every member")
     ap.add_argument("--chance-mis", action="store_true", help="forward dilution: chance profile miscentred like genuine clusters")
+    ap.add_argument("--stacks", default="", help="stack layout tag (measurement/subset_<subset>_<TAG>, from build_escale_stacks.py --out-tag)")
+    ap.add_argument("--min-n", type=int, default=50, help="forward: smallest stack used")
     ap.add_argument("--fix", nargs="*", default=[], metavar="NAME=VALUE", help="fix parameters (diagnostics)")
     ap.add_argument("--q-lx", action="store_true", help="q per cluster from (L_X, z) (logistic regression on the randoms)")
     ap.add_argument("--chance", default="template", choices=["template", "population"],
@@ -633,6 +637,7 @@ if __name__ == "__main__":
     if a.lam_min is not None:
         OPT["lam_min"] = a.lam_min
     FIX.update({k: float(v) for k, v in (x.split("=") for x in a.fix)})
+    STACKS.update(tag=a.stacks, min_n=a.min_n)
     CONTAM.update(mode=a.contam, template_half=a.template_half, q_below80=a.q_below80, chance=a.chance, qlx=a.q_lx, qflat=a.q_flat, chance_mis=a.chance_mis)
     if a.inject:
         data = load_injected(a.subset, *a.inject)
@@ -642,7 +647,8 @@ if __name__ == "__main__":
         raise SystemExit("stacked frameworks need stacks built for this subset (only --subset all has them)")
     tag = (f"{a.mode}_{a.selection}_{a.subset}" + (f"_inj{a.inject[0]}s{a.inject[1]}" + ("hB" if a.template_half == "A" else "") if a.inject else "")
            + (f"_cont{a.contam}" + ("A" if a.template_half == "A" else "") + ("pop" if a.chance == "population" else "") + ("qlx" if a.q_lx else "") + (f"q{a.q_flat:g}" if a.q_flat is not None else "") + ("mis" if a.chance_mis else "")
-              if a.contam != "none" else "") + "".join(f"_fix{k}{v:g}" for k, v in sorted(FIX.items())) + (f"_{a.tag}" if a.tag else ""))
+              if a.contam != "none" else "") + "".join(f"_fix{k}{v:g}" for k, v in sorted(FIX.items())) + (f"_st{a.stacks}" if a.stacks else "")
+           + (f"_minn{a.min_n}" if a.min_n != 50 else "") + (f"_{a.tag}" if a.tag else ""))
     if a.boot:
         if a.mode != "joint":
             raise SystemExit("--boot is for the joint fit")

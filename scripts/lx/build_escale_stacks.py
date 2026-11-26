@@ -6,7 +6,8 @@ Each stack is measured with xlensing.data.stacked_signal on paper 1.1's 16-bin g
   stacks.pkl   {name: {z_bin, lx_bin, n_stacked, ids, z_mean, logLxE_mean, sigmas, sigmas_cov, boosts, boosts_cov}}
   weights.npz  ids, K (N, 16): K_c(R) = sum_gal (1+m) w / Sigma_crit^2 (forward-modelled stacks)
   boosts.npz   per-cluster boost on the joint fit's 6-bin grid, from its stack's fitted B(R) = 1 + B0 (R/Rs)^alpha
-usage: python build_escale_stacks.py
+usage: python build_escale_stacks.py [--subset p95 --nz 3 --nl 3 --out-tag 3x3]
+(p95 default stacks: --nz 2 --nl 3, ~83 clusters each; 2026-11-26: 3x3 / 3x4 layouts for a third redshift bin)
 """
 import os, pickle, time
 import numpy as np
@@ -41,8 +42,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--subset", default="all", choices=["all", "p95", "p90"])
     ap.add_argument("--nz", type=int, default=NZ); ap.add_argument("--nl", type=int, default=NL)
+    ap.add_argument("--out-tag", default="", help="write to subset_<subset>_<tag> (e.g. 3x3) instead of overwriting the default stacks")
     a = ap.parse_args()
-    out = M if a.subset == "all" else f"{M}/subset_{a.subset}"
+    out = (M if a.subset == "all" else f"{M}/subset_{a.subset}") + (f"_{a.out_tag}" if a.out_tag else "")
     os.makedirs(out, exist_ok=True)
     t0 = time.time()
     np.random.seed(20261021)
