@@ -427,6 +427,25 @@ class Forward:
             self.cen, self.mis, self.th = profile_tables(self.x["z"], data["R16"], self.two_halo)
             self.mp = make_prior(selection)
         self.N = len(self.x["z"])
+        # Chance-match dilution (2026-11-26): each member's expected profile is (1 - q_c) x genuine + q_c x the MEAN
+        # chance-match profile, the latter from the halo population fitted on the random pool (chance_population: centred
+        # NFW + two-halo, log M ~ N(a_ch + b_ch (log L_X E^-1 - 43.2), s_ch)) at the member's z and L_X; q_c fixed by
+        # highest-flag tier from the randoms (tier_q).  No per-cluster classification: the stack is only diluted.
+        self.contam = CONTAM["mode"] == "fixed" and not self.det
+        if CONTAM["mode"] == "free":
+            raise SystemExit("forward: only --contam fixed (q is degenerate with the amplitude in a stack)")
+        if self.contam:
+            cp = chance_population(CONTAM["template_half"])
+            llx = self.x["logLx_obs"] - np.log10(lx.efunc(self.x["z"])) - 43.2
+            wch = _lognormal_grid(cp["a_ch"] + cp["b_ch"] * llx, cp["s_ch"])
+            self.ds_ch = np.einsum("nk,nkb->nb", wch, self.cen + self.th)                                  # (N,B)
+            tq = tier_q()
+            self.q = np.array([tq[int(t)] for t in np.asarray(self.x["tier"])])
+            for s in self.st:
+                r = s["rows"]
+                s["q_eff"] = float((self.K[r] * self.q[r, None]).sum() / self.K[r].sum())
+            print(f"forward dilution: q by tier {dict((k, round(v, 3)) for k, v in tq.items())}; source-weighted q per stack "
+                  + ", ".join(f"{s['name']} {s['q_eff']:.2f}" for s in self.st), flush=True)
 
     def loglike(self, p):
         if self.det:
@@ -437,6 +456,8 @@ class Forward:
             w = weights(self.mp, self.x, p)
             ds = (1 - p["f_mis"]) * self.cen + p["f_mis"] * mis_at(self.mis, p["sigma_off"]) + self.th
             dsw = np.einsum("nk,nkb->nb", w, ds)                                                      # (N,B)
+            if self.contam:
+                dsw = (1 - self.q)[:, None] * dsw + self.q[:, None] * self.ds_ch
         ll = 0.0
         for s in self.st:
             r = s["rows"]; mod = (self.K[r] * dsw[r]).sum(0) / self.K[r].sum(0)
@@ -587,7 +608,7 @@ if __name__ == "__main__":
                          "(resampling seed 7000+b, as paper 1.1); unconverged draws are skipped and replaced (at most 10 extra)")
     ap.add_argument("--timeout", type=float, default=2400.0, help="per-bootstrap sampler time limit [s]")
     ap.add_argument("--contam", default="none", choices=["none", "fixed", "free"],
-                    help="joint only: chance-match mixture, q by purity tier fixed from the randoms or free")
+                    help="chance-match mixture (joint) or dilution (forward, fixed only), q by purity tier from the randoms or free")
     ap.add_argument("--template-half", default="all", choices=["all", "A"], help="A: template from CID-even randoms, inject CID-odd")
     ap.add_argument("--q-below80", type=float, default=0.85)
     ap.add_argument("--q-flat", type=float, default=None, help="diagnostic: the same fixed q for every member")
