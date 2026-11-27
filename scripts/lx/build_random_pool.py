@@ -5,7 +5,7 @@ Each row is a real eRASS1 X-ray source (CID6722; its own peak position, flux and
 optical group of a catalogue shifted by -10 deg in RA (RA_opt = RA_peak - 10 deg, checked: median 9.99-10.02 deg,
 Dec unchanged), i.e. a chance match.  z_splus, the richnesses and Lx (recomputed at that z) belong to the chance
 partner.  For each optical magnitude limit (-18.5, -19, -19.5, -20) there are three files: the randoms that pass
-the p80, p90 and p95 matching thresholds (largest to smallest file; N_rand / N_real = 0.25-0.28, 0.14-0.17,
+the p80, p90 and p95 matching thresholds (largest to smallest file, confirmed by the team's file names 2026-11-27; N_rand / N_real = 0.25-0.28, 0.14-0.17,
 0.07-0.08, i.e. 1 - purity).
 
 The pool applies the cuts of build_escale_sample.py with the optical position un-shifted (+10 deg in RA) for the
@@ -36,7 +36,8 @@ OUT = f"{D}/randoms"
 COSMO = FlatLambdaCDM(H0=70, Om0=0.3)
 BAD_TILES = (71150, 42144, 38132)
 Z_MIN, Z_MAX, OFF_MAX, R_CHECK, MIN_COVER, SHIFT = 0.08, 0.25, 2.0, 3.0, 0.8, 10.0
-# file -> (magnitude limit, purity level); levels identified by size within each magnitude (see docstring)
+# file -> (magnitude limit, purity level); first identified by size within each magnitude, CONFIRMED 2026-11-27 by the
+# eSCALE team's Drive names (shortcuts XMass_CID6722_rnd<mag>_p<level>.fits; ~/data/eSCALE_project/escale_randoms_filename_map.csv)
 LEVEL = {"185_74_176": ("18.5", 80), "185_74_132": ("18.5", 90), "185_37_138": ("18.5", 95),
          "19_63_164": ("19", 80), "19_25_132": ("19", 90), "19_27_122": ("19", 95),
          "195_72_124": ("19.5", 80), "195_26_118": ("19.5", 90), "195_45_130": ("19.5", 95),
