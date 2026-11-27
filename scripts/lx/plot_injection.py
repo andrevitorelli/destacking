@@ -51,7 +51,10 @@ def main():
 
     inj = {}
     for f in glob.glob(f"{F}/joint_AB_p95_inj*s*_{TAG}.npz"):
-        n, s = map(int, re.search(r"_inj(\d+)s(\d+)_", f).groups())
+        m = re.search(r"_inj(\d+)s(\d+)_" + TAG + r"\.npz$", f)     # plain injections only (not hB / mixture runs)
+        if not m:
+            continue
+        n, s = map(int, m.groups())
         inj.setdefault(n, {})[s] = f
     real = {"p95": f"{F}/joint_AB_p95_{TAG}", "p90": f"{F}/joint_AB_p90_{TAG}", "p80": f"{F}/joint_AB_p80_{TAG}",
             "full": f"{F}/joint_AB_all_{TAG}"}
