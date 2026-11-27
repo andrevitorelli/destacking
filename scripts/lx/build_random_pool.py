@@ -14,7 +14,8 @@ S-PLUS-X-ray offset:  0.08 < z < 0.25; X-ray peak in DES Y3 (>= 80% of a 3 Mpc d
 several magnitude catalogues): the partner from the brightest-limit (-20) catalogue first, else -19.5, -19, -18.5.
 
 Output: ~/destacking_data/lx_splus_erosita_des/randoms/escale_random_pool.fits with the columns of
-escale_des_sample.fits (+ MAG, FLUX, FLUX_ERR, RP80/RP90/RP95 = the pair appears in that level's random file),
+escale_des_sample.fits (+ MAG, FLUX, FLUX_ERR, RP80/RP90/RP95 = the pair appears in that level's random file; TIER and the contamination
+counts use these, as the real catalogue uses the flags of its brightest-limit row; AP80/90/95 = any magnitude, reference only),
 ID = 1e9 + CID (never collides with the real S-PLUS IDs), and contamination.json with the per-level counts and the highest-flag tiers
 (tier = highest purity flag; the flags are not nested, every real cluster has at least one) used by the mixture model.
 usage: python build_random_pool.py
@@ -78,8 +79,8 @@ def main():
         log.append(f"  after {lab:22s}: {keep.sum()} rows, {len(np.unique(a['cid'][keep]))} X-ray sources")
     a, off = a[keep], off[keep]
 
-    # per-level counts (one per X-ray source), for the contamination estimates
-    counts = {lev: int(len(np.unique(a["cid"][a["lev"] == lev]))) for lev in (80, 90, 95)}
+    # per-level counts (one per X-ray source) with ANY-magnitude flags (used until 2026-11-27; kept for reference)
+    counts_any = {lev: int(len(np.unique(a["cid"][a["lev"] == lev]))) for lev in (80, 90, 95)}
     # one partner per X-ray source: brightest magnitude limit first; flags = that pair is in the level's file
     pair_lev = {}
     for r in a:
@@ -112,13 +113,17 @@ def main():
     for lev in (80, 90, 95):
         cids = set(a["cid"][a["lev"] == lev].tolist())
         out[f"AP{lev}"] = np.isin(p["cid"], list(cids))
-    out["TIER"] = np.where(out["AP95"], 95, np.where(out["AP90"], 90, 80))
+    # TIER from the flags of the chosen (brightest-limit) partner, as the real merged catalogue takes each X-ray source's
+    # row and flags from its brightest-limit catalogue (checked 2026-11-27: 3813/3813); the AP (any-magnitude) flags
+    # over-counted randoms at p95/p90 relative to the real flags.
+    out["TIER"] = np.where(out["RP95"], 95, np.where(out["RP90"], 90, 80))
+    counts = {lev: int(np.sum(out[f"RP{lev}"])) for lev in (80, 90, 95)}
     out.meta["COSMO"] = "FlatLambdaCDM H0=70 Om0=0.3"
     out.meta["CENTRE"] = "X-ray peak; optical partner = chance match (catalogue shifted by 10 deg in RA)"
     out.write(f"{OUT}/escale_random_pool.fits", overwrite=True)
     log.append(f"pool: {len(out)} X-ray sources with one chance partner each "
                f"(magnitude limits {dict(zip(*np.unique(p['mag'], return_counts=True)))})")
-    log.append(f"per-level unique X-ray sources after cuts: {counts}")
+    log.append(f"per-level unique X-ray sources after cuts (brightest-partner flags): {counts}; any-magnitude flags: {counts_any}")
     real = Table.read(f"{D}/escale_des_sample.fits")
     n_real = {80: int(real["P80"].sum()), 90: int(real["P90"].sum()), 95: int(real["P95"].sum()), "all": len(real)}
     tr = np.where(np.asarray(real["P95"], bool), 95, np.where(np.asarray(real["P90"], bool), 90, 80))
@@ -126,7 +131,7 @@ def main():
     for t in tiers:
         tiers[t]["q"] = tiers[t]["n_random"] / tiers[t]["n_real"]
     log.append("highest-flag tiers (random / real = q): " + ", ".join(f"{t}: {v['n_random']}/{v['n_real']} = {v['q']:.3f}" for t, v in tiers.items()))
-    json.dump(dict(n_random_after_cuts=counts, n_real=n_real, tiers=tiers,
+    json.dump(dict(n_random_after_cuts=counts, n_random_after_cuts_anymag=counts_any, n_real=n_real, tiers=tiers, flags="brightest-limit partner (RP)",
                    ratio={lev: counts[lev] / n_real[lev] for lev in (80, 90, 95)}), open(f"{OUT}/contamination.json", "w"), indent=1)
     log.append(f"real sample: {n_real}; N_rand/N_real: " + ", ".join(f"p{l} {counts[l] / n_real[l]:.3f}" for l in (80, 90, 95)))
     print("\n".join(log))

@@ -57,7 +57,9 @@ def main():
     c = json.load(open(f"{D}/randoms/contamination.json"))
     ft = {int(k): v["q"] for k, v in c["tiers"].items()}
     tiers = [("tier 95 (= p95)", "p95", ft[95]), ("tier 90 (P90, not P95)", "t90", ft[90]), ("tier 80 (P80 only)", "t80", ft[80])]
-    over = [("p95", "p95", 76 / 496), ("p90", "p90", c["ratio"]["90"]), ("full", "all", (76 + 265 + 353) / 1556)]
+    n95 = c["n_random_after_cuts"]["95"]
+    over = [("p95", "p95", c["ratio"]["95"]), ("p90", "p90", c["ratio"]["90"]),
+            ("full", "all", sum(v["n_random"] for v in c["tiers"].values()) / c["n_real"]["all"])]
     inj = {}
     for f in glob.glob(f"{F}/joint_AB_p95_inj*s*_{T}.npz"):
         m = re.search(r"_inj(\d+)s(\d+)_" + T + r"\.npz$", f)
@@ -104,7 +106,7 @@ def main():
         # injection slope, anchored at the p95 point
         xs, ys = [], []
         for n in sorted(inj):
-            xs.append((76 + n) / (496 + n)); ys.append(np.mean([quant(f, pn)[1] for f in inj[n]]))
+            xs.append((n95 + n) / (496 + n)); ys.append(np.mean([quant(f, pn)[1] for f in inj[n]]))
         if xs:
             xs = np.r_[ft[95], xs]; ys = np.r_[y[0], ys]
             pi = np.polyfit(xs, ys, 1)
